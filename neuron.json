@@ -1,0 +1,12 @@
+{
+  "name": "neuron",
+  "version": "1.0.0",
+  "description": "CLI-based distribution layer for AI tools, agents, and MCP servers",
+  "entry": "cmd/neuron/main.go",
+  "runtime": "binary",
+  "permissions": ["http", "env:HOME"],
+  "models": [
+    { "capability": "tool_use", "context": 32000 }
+  ],
+  "dependencies": {}
+}
