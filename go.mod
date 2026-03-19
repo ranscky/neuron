@@ -1,4 +1,4 @@
-module github.com/yourusername/neuron
+module github.com/ranscky/neuron
 
 go 1.22
 

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/yourusername/neuron/pkg/manifest"
+	"github.com/ranscky/neuron/pkg/manifest"
 )
 
 // Injector handles injecting secrets into runtime env

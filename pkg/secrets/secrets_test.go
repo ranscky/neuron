@@ -3,7 +3,7 @@ package secrets
 import (
 	"testing"
 	
-	"github.com/yourusername/neuron/pkg/manifest"
+	"github.com/ranscky/neuron/pkg/manifest"
 )
 
 func TestSecretsIntegration(t *testing.T) {
