@@ -1,0 +1,31 @@
+{
+  "name": "tools/web-search",
+  "version": "1.0.0",
+  "description": "Fetch real-time information from the web using Tavily",
+  "capability": {
+    "input": [
+      { "name": "query", "type": "string", "required": true },
+      { "name": "max_results", "type": "integer", "required": false, "default": 5 }
+    ],
+    "output": {
+      "type": "array",
+      "format": "json"
+    },
+    "errors": ["search_failed", "invalid_query", "api_key_missing"]
+  },
+  "performance": {
+    "avg_latency_ms": 800,
+    "p99_latency_ms": 2000,
+    "success_rate": 0.96,
+    "cost_per_call_usd": 0.001
+  },
+  "permissions": [
+    "http",
+    "env:TAVILY_API_KEY"
+  ],
+  "models": [],
+  "runtime": "python",
+  "entry": "main.py",
+  "dependencies": {},
+  "neuron": "1"
+}
