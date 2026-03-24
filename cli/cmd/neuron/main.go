@@ -17,7 +17,7 @@ import (
 var (
 	// Initialize registry client with a base URL
 	// In a real implementation, this would come from config
-	registryClient = registry.NewRegistryClient("https://registry.neuron.ai")
+	registryClient = registry.NewRegistryClient("https://neuron-production-ae02.up.railway.app")
 	
 	// Initialize installer
 	installerClient *installer.Installer
