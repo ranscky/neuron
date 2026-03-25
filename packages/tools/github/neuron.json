@@ -1,0 +1,34 @@
+{
+  "name": "tools/github",
+  "version": "1.0.0",
+  "description": "Interact with GitHub repositories using the GitHub API",
+  "capability": {
+    "input": [
+      { "name": "action", "type": "string", "required": true, "description": "Action to perform: get_repo, list_issues, get_file, open_issue" },
+      { "name": "repo", "type": "string", "required": true, "description": "Repository in format 'owner/repo'" },
+      { "name": "path", "type": "string", "required": false, "description": "File path (required for get_file)" },
+      { "name": "title", "type": "string", "required": false, "description": "Issue title (required for open_issue)" },
+      { "name": "body", "type": "string", "required": false, "description": "Issue body (required for open_issue)" }
+    ],
+    "output": {
+      "type": "object",
+      "format": "json"
+    },
+    "errors": ["invalid_action", "repo_not_found", "file_not_found", "issue_creation_failed", "authentication_error"]
+  },
+  "performance": {
+    "avg_latency_ms": 1000,
+    "p99_latency_ms": 3000,
+    "success_rate": 0.95,
+    "cost_per_call_usd": 0.000
+  },
+  "permissions": [
+    "http",
+    "env:GITHUB_TOKEN"
+  ],
+  "models": [],
+  "runtime": "python",
+  "entry": "main.py",
+  "dependencies": {},
+  "neuron": "1"
+}
