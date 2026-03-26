@@ -21,27 +21,64 @@ func NewPackagesHandler(s store.Store) *PackagesHandler {
 
 // ServeHTTP handles the /v1/packages requests
 func (h *PackagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Extract path segments after /v1/packages/
+	// Strip /v1/packages/ prefix from the path
 	path := strings.TrimPrefix(r.URL.Path, "/v1/packages/")
-	segments := strings.Split(path, "/")
-
+	
+	// Handle empty path
+	if path == "" || path == "/" {
+		http.Error(w, `{"error": "not found"}`, http.StatusNotFound)
+		return
+	}
+	
+	// Remove leading slash if present
+	path = strings.TrimPrefix(path, "/")
+	
 	w.Header().Set("Content-Type", "application/json")
 
+	// Parse the path to extract name and version/action
+	// For paths with slashes in package names, we need to manually parse
+	// We'll split by "/" and analyze the last segments to determine the action
+	
+	segments := strings.Split(path, "/")
+	
+	// Handle different path patterns
 	switch {
-	case len(segments) == 1 && segments[0] != "":
-		// GET /v1/packages/:name
-		h.handleGetPackage(w, r, segments[0])
-	case len(segments) == 2 && segments[0] != "" && segments[1] != "":
-		if segments[1] == "versions" {
-			// GET /v1/packages/:name/versions
-			h.handleListVersions(w, r, segments[0])
-		} else {
-			// GET /v1/packages/:name/:version
-			h.handleGetPackageVersion(w, r, segments[0], segments[1])
-		}
-	case len(segments) == 3 && segments[0] != "" && segments[1] != "" && segments[2] == "download":
+	case len(segments) >= 2 && segments[len(segments)-1] == "download":
 		// GET /v1/packages/:name/:version/download
-		h.handleDownloadPackage(w, r, segments[0], segments[1])
+		// Name is everything except the last two segments
+		if len(segments) < 3 {
+			http.Error(w, `{"error": "invalid path"}`, http.StatusBadRequest)
+			return
+		}
+		version := segments[len(segments)-2]
+		name := strings.Join(segments[:len(segments)-2], "/")
+		h.handleDownloadPackage(w, r, name, version)
+		
+	case len(segments) >= 2 && segments[len(segments)-1] == "versions":
+		// GET /v1/packages/:name/versions
+		// Name is everything except the last segment
+		name := strings.Join(segments[:len(segments)-1], "/")
+		h.handleListVersions(w, r, name)
+		
+	case len(segments) >= 2:
+		// GET /v1/packages/:name/:version
+		// Check if the last segment is a version or if it's just a name with slashes
+		version := segments[len(segments)-1]
+		name := strings.Join(segments[:len(segments)-1], "/")
+		
+		// If the last segment looks like a version (contains dots or numbers), treat as version
+		// Otherwise, treat as just a name request
+		if strings.Contains(version, ".") || strings.ContainsAny(version, "0123456789") {
+			h.handleGetPackageVersion(w, r, name, version)
+		} else {
+			// This is just a name with slashes
+			h.handleGetPackage(w, r, path)
+		}
+		
+	case len(segments) == 1 && segments[0] != "":
+		// GET /v1/packages/:name (simple name without slashes)
+		h.handleGetPackage(w, r, segments[0])
+		
 	default:
 		http.Error(w, `{"error": "not found"}`, http.StatusNotFound)
 	}

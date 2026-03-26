@@ -22,7 +22,7 @@ func main() {
 
 	// Register all routes
 	mux.Handle("/v1/publish", handlers.NewPublishHandler(store))
-	mux.Handle("/v1/packages/", handlers.NewPackagesHandler(store))
+	mux.HandleFunc("/v1/packages/", handlers.NewPackagesHandler(store).ServeHTTP)
 	mux.Handle("/v1/search", handlers.NewSearchHandler(store))
 
 	// Wrap the mux with middleware in the specified order:
