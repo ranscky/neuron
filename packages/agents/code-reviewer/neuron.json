@@ -1,0 +1,36 @@
+{
+  "name": "agents/code-reviewer",
+  "version": "1.0.0",
+  "description": "AI-powered code reviewer that analyzes code for bugs, improvements, and security issues",
+  "capability": {
+    "input": [
+      { "name": "path", "type": "string", "required": true, "description": "File or directory path to review" },
+      { "name": "focus", "type": "string", "required": false, "default": "general", "description": "Review focus: security, performance, readability, or general" }
+    ],
+    "output": {
+      "type": "object",
+      "format": "json"
+    },
+    "errors": ["file_not_found", "review_failed", "api_error"]
+  },
+  "performance": {
+    "avg_latency_ms": 2500,
+    "p99_latency_ms": 6000,
+    "success_rate": 0.95,
+    "cost_per_call_usd": 0.000
+  },
+  "permissions": [
+    "file:read",
+    "local:ollama"
+  ],
+  "models": [
+    { "capability": "coding", "context": 32000 }
+  ],
+  "runtime": "python",
+  "entry": "main.py",
+  "dependencies": {
+    "tools/github": "^1.0.0",
+    "models/qwen-coder": "^1.0.0"
+  },
+  "neuron": "1"
+}

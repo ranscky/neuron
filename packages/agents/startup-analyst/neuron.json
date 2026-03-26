@@ -1,0 +1,36 @@
+{
+  "name": "agents/startup-analyst",
+  "version": "1.0.0",
+  "description": "Startup idea analyzer that researches market viability and provides strategic recommendations",
+  "capability": {
+    "input": [
+      { "name": "idea", "type": "string", "required": true },
+      { "name": "market", "type": "string", "required": false, "default": "global" }
+    ],
+    "output": {
+      "type": "object",
+      "format": "json"
+    },
+    "errors": ["search_failed", "analysis_failed", "api_key_missing"]
+  },
+  "performance": {
+    "avg_latency_ms": 2500,
+    "p99_latency_ms": 6000,
+    "success_rate": 0.95,
+    "cost_per_call_usd": 0.000
+  },
+  "permissions": [
+    "http",
+    "env:TAVILY_API_KEY",
+    "local:ollama"
+  ],
+  "models": [
+    { "capability": "reasoning", "context": 32000 }
+  ],
+  "runtime": "python",
+  "entry": "main.py",
+  "dependencies": {
+    "tools/web-search": "^1.0.0"
+  },
+  "neuron": "1"
+}

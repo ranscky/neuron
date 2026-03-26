@@ -1,0 +1,35 @@
+{
+  "name": "agents/customer-support",
+  "version": "1.0.0",
+  "description": "Customer support agent that answers questions using Notion knowledge base",
+  "capability": {
+    "input": [
+      { "name": "question", "type": "string", "required": true },
+      { "name": "context", "type": "string", "required": false },
+      { "name": "tone", "type": "string", "required": false, "default": "friendly", "enum": ["friendly", "professional", "formal"] }
+    ],
+    "output": {
+      "type": "object",
+      "format": "json"
+    },
+    "errors": ["cache_not_found", "ollama_api_error", "processing_error"]
+  },
+  "performance": {
+    "avg_latency_ms": 1200,
+    "p99_latency_ms": 2500,
+    "success_rate": 0.95,
+    "cost_per_call_usd": 0.000
+  },
+  "permissions": [
+    "local:ollama"
+  ],
+  "models": [
+    { "capability": "reasoning", "context": 32000 }
+  ],
+  "runtime": "python",
+  "entry": "main.py",
+  "dependencies": {
+    "rag/notion-sync": "^1.0.0"
+  },
+  "neuron": "1"
+}
