@@ -31,12 +31,8 @@ func (h *SearchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Read q query param
 	query := r.URL.Query().Get("q")
-	if query == "" {
-		http.Error(w, `{"error": "query parameter 'q' is required"}`, http.StatusBadRequest)
-		return
-	}
 
-	// Call store.Search(q)
+	// Call store.Search(q) - empty query will return all packages
 	results, err := h.store.Search(query)
 	if err != nil {
 		http.Error(w, `{"error": "search failed"}`, http.StatusInternalServerError)

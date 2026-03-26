@@ -1,0 +1,36 @@
+{
+  "name": "agents/researcher",
+  "version": "1.0.0",
+  "description": "Research assistant that searches the web and synthesizes findings using Ollama",
+  "capability": {
+    "input": [
+      { "name": "query", "type": "string", "required": true },
+      { "name": "depth", "type": "integer", "required": false, "default": 3 }
+    ],
+    "output": {
+      "type": "object",
+      "format": "json"
+    },
+    "errors": ["search_failed", "synthesis_failed", "api_key_missing"]
+  },
+  "performance": {
+    "avg_latency_ms": 2000,
+    "p99_latency_ms": 5000,
+    "success_rate": 0.95,
+    "cost_per_call_usd": 0.000
+  },
+  "permissions": [
+    "http",
+    "env:TAVILY_API_KEY",
+    "local:ollama"
+  ],
+  "models": [
+    { "capability": "reasoning", "context": 32000 }
+  ],
+  "runtime": "python",
+  "entry": "main.py",
+  "dependencies": {
+    "tools/web-search": "^1.0.0"
+  },
+  "neuron": "1"
+}
