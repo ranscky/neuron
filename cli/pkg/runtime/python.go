@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -89,14 +90,58 @@ func (p *PythonRuntime) Run(entry string, args []string, env map[string]string) 
 		cmd.Env = envVars
 	}
 	
-	// 7. Pipe stdin to the subprocess and capture stdout as output
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	
-	// Run the command
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to execute Python script: %w", err)
+	// 7. Handle stdin based on whether args are provided
+	if len(args) > 0 {
+		// If args is not empty, write args[0] as bytes to the subprocess's stdin pipe
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			return fmt.Errorf("failed to create stdin pipe: %w", err)
+		}
+		
+		// Create buffers to capture stdout and stderr
+		stdoutBuf := &bytes.Buffer{}
+		stderrBuf := &bytes.Buffer{}
+		cmd.Stdout = stdoutBuf
+		cmd.Stderr = stderrBuf
+		
+		// Start the command
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("failed to start command: %w", err)
+		}
+		
+		// Write args[0] to stdin and close it
+		if _, err := stdin.Write([]byte(args[0])); err != nil {
+			return fmt.Errorf("failed to write to stdin: %w", err)
+		}
+		if err := stdin.Close(); err != nil {
+			return fmt.Errorf("failed to close stdin: %w", err)
+		}
+		
+		// Wait for the command to finish
+		err = cmd.Wait()
+		
+		// Print stdout output
+		if stdoutBuf.Len() > 0 {
+			fmt.Print(stdoutBuf.String())
+		}
+		
+		// Handle stderr and exit code
+		if err != nil {
+			if stderrBuf.Len() > 0 {
+				fmt.Fprintf(os.Stderr, "Error: %s\n", stderrBuf.String())
+			}
+			return fmt.Errorf("failed to execute Python script: %w", err)
+		}
+	} else {
+		// If args is empty, leave stdin connected to os.Stdin so the user can type input
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		
+		// Run the command
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to execute Python script: %w", err)
+		}
 	}
 	
 	return nil

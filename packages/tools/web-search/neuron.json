@@ -1,6 +1,6 @@
 {
   "name": "tools/web-search",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Fetch real-time information from the web using Tavily",
   "capability": {
     "input": [

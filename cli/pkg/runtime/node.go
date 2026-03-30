@@ -1,7 +1,9 @@
 package runtime
 
 import (
+	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 )
 
@@ -30,10 +32,58 @@ func (n *NodeRuntime) Run(entry string, args []string, env map[string]string) er
 		cmd.Env = append(cmd.Env, envVars...)
 	}
 	
-	// Run the command
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to execute Node script: %w\nOutput: %s", err, output)
+	// Handle stdin based on whether args are provided
+	if len(args) > 0 {
+		// If args is not empty, write args[0] as bytes to the subprocess's stdin pipe
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			return fmt.Errorf("failed to create stdin pipe: %w", err)
+		}
+		
+		// Create buffers to capture stdout and stderr
+		stdoutBuf := &bytes.Buffer{}
+		stderrBuf := &bytes.Buffer{}
+		cmd.Stdout = stdoutBuf
+		cmd.Stderr = stderrBuf
+		
+		// Start the command
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("failed to start command: %w", err)
+		}
+		
+		// Write args[0] to stdin and close it
+		if _, err := stdin.Write([]byte(args[0])); err != nil {
+			return fmt.Errorf("failed to write to stdin: %w", err)
+		}
+		if err := stdin.Close(); err != nil {
+			return fmt.Errorf("failed to close stdin: %w", err)
+		}
+		
+		// Wait for the command to finish
+		err = cmd.Wait()
+		
+		// Print stdout output
+		if stdoutBuf.Len() > 0 {
+			fmt.Print(stdoutBuf.String())
+		}
+		
+		// Handle stderr and exit code
+		if err != nil {
+			if stderrBuf.Len() > 0 {
+				fmt.Fprintf(os.Stderr, "Error: %s\n", stderrBuf.String())
+			}
+			return fmt.Errorf("failed to execute Node script: %w", err)
+		}
+	} else {
+		// If args is empty, connect stdout/stderr and leave stdin connected to os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Stdin = os.Stdin
+		
+		// Run the command
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to execute Node script: %w", err)
+		}
 	}
 	
 	return nil

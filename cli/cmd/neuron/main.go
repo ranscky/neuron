@@ -83,11 +83,16 @@ var installCmd = &cobra.Command{
 			name = packageName
 		}
 		
-		// For now, we'll use a placeholder for version resolution
-		// In a real implementation, we would resolve the version constraint
-		version := "1.0.0"
-		if constraint != "" {
-			version = constraint
+		// If no constraint is provided, fetch the latest version from the registry
+		version := constraint
+		if version == "" {
+			fmt.Printf("Fetching latest version for package %s...\n", name)
+			pkgInfo, err := registryClient.GetPackageInfo(name)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to get package info for %s: %v\n", name, err)
+				os.Exit(1)
+			}
+			version = pkgInfo.Version
 		}
 		
 		// Download the package

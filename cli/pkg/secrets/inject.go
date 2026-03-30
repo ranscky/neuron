@@ -2,6 +2,7 @@ package secrets
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/ranscky/neuron/pkg/manifest"
@@ -30,7 +31,14 @@ func (i *Injector) Inject(manifest *manifest.Manifest, env map[string]string) er
 			// Get the secret value from the keyring
 			value, err := i.store.Get(permission)
 			if err != nil {
-				return fmt.Errorf("failed to get secret for permission %s: %w", permission, err)
+				// Keyring lookup failed, fall back to checking environment variable
+				envValue := os.Getenv(envVarName)
+				if envValue == "" {
+					// Both keyring and environment variable failed, return error
+					return fmt.Errorf("failed to get secret for permission %s: %w", permission, err)
+				}
+				// Use environment variable value
+				value = envValue
 			}
 			
 			// Inject the value into the environment map
