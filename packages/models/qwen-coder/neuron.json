@@ -1,6 +1,6 @@
 {
   "name": "models/qwen-coder",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Qwen3 Coder model abstraction for code generation",
   "capability": {
     "input": [

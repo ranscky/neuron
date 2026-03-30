@@ -1,6 +1,6 @@
 {
   "name": "agents/startup-analyst",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Startup idea analyzer that researches market viability and provides strategic recommendations",
   "capability": {
     "input": [

@@ -1,6 +1,6 @@
 {
   "name": "agents/customer-support",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Customer support agent that answers questions using Notion knowledge base",
   "capability": {
     "input": [

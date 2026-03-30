@@ -1,6 +1,6 @@
 {
   "name": "agents/code-reviewer",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "AI-powered code reviewer that analyzes code for bugs, improvements, and security issues",
   "capability": {
     "input": [

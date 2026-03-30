@@ -1,6 +1,6 @@
 {
   "name": "agents/content-writer",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Content writer that creates engaging content using web research and Ollama",
   "capability": {
     "input": [

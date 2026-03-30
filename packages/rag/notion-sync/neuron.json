@@ -1,6 +1,6 @@
 {
   "name": "rag/notion-sync",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Sync Notion databases and query content using Ollama",
   "capability": {
     "input": [
