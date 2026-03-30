@@ -1,10 +1,13 @@
 package installer
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 // Installer handles downloading and installing packages
 type Installer struct {
@@ -58,22 +61,70 @@ func (i *Installer) Install(name, version string) error {
 
 // downloadPackage downloads a package from the registry
 func (i *Installer) downloadPackage(name, version string) (io.Reader, error) {
-	// For this implementation, we'll simulate downloading from a registry
 	// In a real implementation, this would connect to an actual registry
+	// For now, we'll create a mock tar.gz file for testing purposes
 	
 	// Create a temporary file to simulate downloaded package data
 	tmpFile, err := os.CreateTemp("", "package-*.tar.gz")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp file: %w", err)
 	}
-	defer os.Remove(tmpFile.Name())
 	defer tmpFile.Close()
 	
-	// Write some mock data to simulate a package
-	mockData := fmt.Sprintf("This is a mock package: %s@%s\n", name, version)
-	if _, err := tmpFile.WriteString(mockData); err != nil {
-		return nil, fmt.Errorf("failed to write mock data: %w", err)
+	// Create a gzip writer
+	gzipWriter := gzip.NewWriter(tmpFile)
+	defer gzipWriter.Close()
+	
+	// Create a tar writer
+	tarWriter := tar.NewWriter(gzipWriter)
+	defer tarWriter.Close()
+	
+	// Create a simple neuron.json file
+	manifestContent := fmt.Sprintf(`{
+  "name": "%s",
+  "version": "%s",
+  "description": "A sample package",
+  "entry": "main.py",
+  "runtime": "python"
+}`, name, version)
+	
+	// Add neuron.json to the tar
+	hdr := &tar.Header{
+		Name: "neuron.json",
+		Mode: 0644,
+		Size: int64(len(manifestContent)),
 	}
+	
+	if err := tarWriter.WriteHeader(hdr); err != nil {
+		return nil, fmt.Errorf("failed to write tar header: %w", err)
+	}
+	
+	if _, err := tarWriter.Write([]byte(manifestContent)); err != nil {
+		return nil, fmt.Errorf("failed to write manifest to tar: %w", err)
+	}
+	
+	// Add a simple main.py file
+	mainPyContent := `#!/usr/bin/env python3
+print("Hello from the installed package!")
+`
+	
+	hdr = &tar.Header{
+		Name: "main.py",
+		Mode: 0755,
+		Size: int64(len(mainPyContent)),
+	}
+	
+	if err := tarWriter.WriteHeader(hdr); err != nil {
+		return nil, fmt.Errorf("failed to write tar header for main.py: %w", err)
+	}
+	
+	if _, err := tarWriter.Write([]byte(mainPyContent)); err != nil {
+		return nil, fmt.Errorf("failed to write main.py to tar: %w", err)
+	}
+	
+	// Close writers to flush data
+	tarWriter.Close()
+	gzipWriter.Close()
 	
 	// Reset file pointer to beginning
 	if _, err := tmpFile.Seek(0, 0); err != nil {
@@ -86,21 +137,71 @@ func (i *Installer) downloadPackage(name, version string) (io.Reader, error) {
 
 // extractPackage extracts a package to the target directory
 func (i *Installer) extractPackage(reader io.Reader, targetDir string) error {
-	// For this implementation, we'll simulate extraction
-	// In a real implementation, this would handle tar.gz extraction
+	// Create gzip reader
+	gzipReader, err := gzip.NewReader(reader)
+	if err != nil {
+		return fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer gzipReader.Close()
 	
-	// Create a simple file to represent the extracted package
-	manifestPath := filepath.Join(targetDir, "neuron.json")
-	manifestContent := fmt.Sprintf(`{
-  "name": "%s",
-  "version": "1.0.0",
-  "description": "A sample package",
-  "entry": "main.py",
-  "runtime": "python"
-}`, filepath.Base(targetDir))
+	// Create tar reader
+	tarReader := tar.NewReader(gzipReader)
 	
-	if err := os.WriteFile(manifestPath, []byte(manifestContent), 0644); err != nil {
-		return fmt.Errorf("failed to create mock manifest: %w", err)
+	// Extract files
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("failed to read tar header: %w", err)
+		}
+		
+		// Skip empty headers
+		if header == nil {
+			continue
+		}
+		
+		// Construct the file path
+		filePath := filepath.Join(targetDir, header.Name)
+		
+		// Check for Zip Slip vulnerability
+		if !filepath.IsAbs(filePath) && !strings.HasPrefix(filePath, targetDir) {
+			return fmt.Errorf("illegal file path: %s", filePath)
+		}
+		
+		// Create directory structure if needed
+		if header.Typeflag == tar.TypeDir {
+			if err := os.MkdirAll(filePath, os.FileMode(header.Mode)); err != nil {
+				return fmt.Errorf("failed to create directory %s: %w", filePath, err)
+			}
+		} else {
+			// Create file
+			file, err := os.Create(filePath)
+			if err != nil {
+				return fmt.Errorf("failed to create file %s: %w", filePath, err)
+			}
+			
+			// Copy file contents
+			if _, err := io.Copy(file, tarReader); err != nil {
+				file.Close()
+				return fmt.Errorf("failed to write file %s: %w", filePath, err)
+			}
+			
+			// Set file permissions
+			if err := file.Chmod(os.FileMode(header.Mode)); err != nil {
+				file.Close()
+				return fmt.Errorf("failed to set permissions for %s: %w", filePath, err)
+			}
+			
+			file.Close()
+		}
+	}
+	
+	// Verify main.py exists
+	mainPyPath := filepath.Join(targetDir, "main.py")
+	if _, err := os.Stat(mainPyPath); os.IsNotExist(err) {
+		return fmt.Errorf("main.py not found in extracted package")
 	}
 	
 	return nil

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -108,6 +108,33 @@ func (idx *Index) Search(query string) []PackageInfo {
 	return results
 }
 
+// compareSemVer compares two semantic versions
+// Returns: -1 if a < b, 0 if a == b, 1 if a > b
+func compareSemVer(a, b string) int {
+	aParts := strings.Split(a, ".")
+	bParts := strings.Split(b, ".")
+	
+	// Compare each part (major, minor, patch)
+	for i := 0; i < 3; i++ {
+		// If one version has fewer parts, treat missing parts as 0
+		var aVal, bVal int
+		if i < len(aParts) {
+			aVal, _ = strconv.Atoi(aParts[i])
+		}
+		if i < len(bParts) {
+			bVal, _ = strconv.Atoi(bParts[i])
+		}
+		
+		if aVal < bVal {
+			return -1
+		} else if aVal > bVal {
+			return 1
+		}
+	}
+	
+	return 0
+}
+
 // GetLatest returns the highest semver version for a package
 func (idx *Index) GetLatest(name string) (string, error) {
 	versions := []string{}
@@ -126,9 +153,18 @@ func (idx *Index) GetLatest(name string) (string, error) {
 		return "", fmt.Errorf("no versions found for package %s", name)
 	}
 	
-	// Sort versions (this is a simple sort, not semver-aware)
-	sort.Strings(versions)
+	// If only one version exists, return it
+	if len(versions) == 1 {
+		return versions[0], nil
+	}
 	
-	// Return the highest version (last in sorted list)
-	return versions[len(versions)-1], nil
+	// Find the highest semver version
+	highest := versions[0]
+	for i := 1; i < len(versions); i++ {
+		if compareSemVer(versions[i], highest) > 0 {
+			highest = versions[i]
+		}
+	}
+	
+	return highest, nil
 }

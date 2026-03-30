@@ -1,14 +1,24 @@
 package installer
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
 func TestLockfile(t *testing.T) {
-	// Create a new lockfile
-	lf, err := NewLockfile()
+	// Create a temporary directory for testing
+	tempDir, err := os.MkdirTemp("", "neuron-test")
 	if err != nil {
-		t.Fatalf("Failed to create lockfile: %v", err)
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create a lockfile with a custom path
+	lockfilePath := filepath.Join(tempDir, "lock.json")
+	lf := &Lockfile{
+		path: lockfilePath,
+		data: make(map[string]string),
 	}
 
 	// Add a package
@@ -47,10 +57,23 @@ func TestLockfile(t *testing.T) {
 }
 
 func TestInstaller(t *testing.T) {
-	// Create a new installer
-	installer, err := NewInstaller()
+	// Create a temporary directory for testing
+	tempDir, err := os.MkdirTemp("", "neuron-test")
 	if err != nil {
-		t.Fatalf("Failed to create installer: %v", err)
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create a custom lockfile for testing
+	lockfilePath := filepath.Join(tempDir, "lock.json")
+	lockfile := &Lockfile{
+		path: lockfilePath,
+		data: make(map[string]string),
+	}
+
+	// Create a new installer with the custom lockfile
+	installer := &Installer{
+		lockfile: lockfile,
 	}
 
 	// Install a package (this will use the mock implementation)
