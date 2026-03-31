@@ -92,17 +92,43 @@ func (idx *Index) AddPackage(pkg PackageInfo) error {
 }
 
 // Search performs a case-insensitive string contains check on name and description
+// Returns only the latest version of each package
 func (idx *Index) Search(query string) []PackageInfo {
 	query = strings.ToLower(query)
-	results := []PackageInfo{}
+	
+	// Group packages by name
+	packagesByName := make(map[string][]PackageInfo)
 	
 	for _, pkg := range idx.packages {
 		name := strings.ToLower(pkg.Name)
 		description := strings.ToLower(pkg.Description)
 		
-		if strings.Contains(name, query) || strings.Contains(description, query) {
-			results = append(results, pkg)
+		if query == "" || strings.Contains(name, query) || strings.Contains(description, query) {
+			packagesByName[pkg.Name] = append(packagesByName[pkg.Name], pkg)
 		}
+	}
+	
+	// For each package name, find the latest version
+	results := []PackageInfo{}
+	for _, packages := range packagesByName {
+		if len(packages) == 0 {
+			continue
+		}
+		
+		// If only one version exists, use it
+		if len(packages) == 1 {
+			results = append(results, packages[0])
+			continue
+		}
+		
+		// Find the latest version using semver comparison
+		latest := packages[0]
+		for i := 1; i < len(packages); i++ {
+			if compareSemVer(packages[i].Version, latest.Version) > 0 {
+				latest = packages[i]
+			}
+		}
+		results = append(results, latest)
 	}
 	
 	return results
