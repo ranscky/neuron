@@ -57,6 +57,7 @@ func main() {
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(searchCmd)
 	rootCmd.AddCommand(listCmd)
+	rootCmd.AddCommand(secretsCmd)
 	
 	// Execute the root command
 	if err := rootCmd.Execute(); err != nil {
@@ -179,6 +180,34 @@ var runCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		
+		// Check dependencies and install any that are not already installed
+		if pkgManifest.Dependencies != nil {
+			for depName, depVersion := range pkgManifest.Dependencies {
+				// Check if dependency is already installed
+				_, err := lockFile.Get(depName)
+				if err != nil {
+					// Dependency not installed, install it
+					fmt.Printf("Installing dependency %s@%s...\n", depName, depVersion)
+					
+					// Download the package
+					_, err := registryClient.Fetch(depName, depVersion)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Failed to fetch dependency %s@%s: %v\n", depName, depVersion, err)
+						os.Exit(1)
+					}
+					
+					// Install the package
+					err = installerClient.Install(depName, depVersion)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Failed to install dependency %s@%s: %v\n", depName, depVersion, err)
+						os.Exit(1)
+					}
+					
+					fmt.Printf("Successfully installed dependency %s@%s\n", depName, depVersion)
+				}
+			}
+		}
+		
 		// Initialize secrets injector
 		secretStore := secrets.NewStore()
 		injector := secrets.NewInjector(secretStore)
@@ -277,4 +306,64 @@ var listCmd = &cobra.Command{
 		}
 		w.Flush()
 	},
+}
+
+// secretsCmd represents the secrets command
+var secretsCmd = &cobra.Command{
+	Use:   "secrets",
+	Short: "Manage secrets",
+	Long:  `Manage secrets stored in the OS keychain`,
+}
+
+// secretsSetCmd represents the secrets set command
+var secretsSetCmd = &cobra.Command{
+	Use:   "set <key> <value>",
+	Short: "Set a secret in the OS keychain",
+	Long:  `Store a secret in the OS keychain using zalando/go-keyring with service name "neuron"`,
+	Args:  cobra.ExactArgs(2),
+	Run: func(cmd *cobra.Command, args []string) {
+		key := args[0]
+		value := args[1]
+		
+		// Create a store
+		store := secrets.NewStore()
+		
+		// Set the secret
+		err := store.Set(key, value)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to set secret: %v\n", err)
+			os.Exit(1)
+		}
+		
+		fmt.Printf("Successfully set secret '%s'\n", key)
+	},
+}
+
+// secretsGetCmd represents the secrets get command
+var secretsGetCmd = &cobra.Command{
+	Use:   "get <key>",
+	Short: "Get a secret from the OS keychain",
+	Long:  `Retrieve and print a secret from the OS keychain`,
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		key := args[0]
+		
+		// Create a store
+		store := secrets.NewStore()
+		
+		// Get the secret
+		value, err := store.Get(key)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to get secret: %v\n", err)
+			os.Exit(1)
+		}
+		
+		fmt.Println(value)
+	},
+}
+
+func init() {
+	// Add subcommands to secretsCmd
+	secretsCmd.AddCommand(secretsSetCmd)
+	secretsCmd.AddCommand(secretsGetCmd)
 }

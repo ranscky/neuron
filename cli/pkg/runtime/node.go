@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 // NodeRuntime handles Node runtime execution
@@ -32,9 +33,9 @@ func (n *NodeRuntime) Run(entry string, args []string, env map[string]string) er
 		cmd.Env = append(cmd.Env, envVars...)
 	}
 	
-	// Handle stdin based on whether args are provided
+	// Handle stdin - pipe JSON args to subprocess stdin
 	if len(args) > 0 {
-		// If args is not empty, write args[0] as bytes to the subprocess's stdin pipe
+		// Join all args into a single JSON string and write to stdin
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
 			return fmt.Errorf("failed to create stdin pipe: %w", err)
@@ -51,8 +52,9 @@ func (n *NodeRuntime) Run(entry string, args []string, env map[string]string) er
 			return fmt.Errorf("failed to start command: %w", err)
 		}
 		
-		// Write args[0] to stdin and close it
-		if _, err := stdin.Write([]byte(args[0])); err != nil {
+		// Write all args as JSON to stdin and close it
+		jsonArgs := strings.Join(args, " ")
+		if _, err := stdin.Write([]byte(jsonArgs)); err != nil {
 			return fmt.Errorf("failed to write to stdin: %w", err)
 		}
 		if err := stdin.Close(); err != nil {
