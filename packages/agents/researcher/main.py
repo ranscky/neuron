@@ -22,8 +22,24 @@ def run(inputs: dict) -> dict:
             'max_results': depth
         }
         
-        # Get the path to tools/web-search main.py
-        web_search_path = Path.home() / '.neuron' / 'packages' / 'tools' / 'web-search' / '1.0.0' / 'main.py'
+        # Get the path to tools/web-search main.py with dynamic version detection
+        web_search_base_path = Path.home() / '.neuron' / 'packages' / 'tools' / 'web-search'
+        
+        # Dynamically detect the installed version
+        web_search_version = None
+        if web_search_base_path.exists():
+            try:
+                versions = [d.name for d in web_search_base_path.iterdir() if d.is_dir()]
+                if versions:
+                    web_search_version = sorted(versions)[-1]  # Get the latest version
+            except Exception:
+                pass
+        
+        if web_search_version:
+            web_search_path = web_search_base_path / web_search_version / 'main.py'
+        else:
+            # Fallback to hardcoded path if dynamic detection fails
+            web_search_path = web_search_base_path / '1.0.0' / 'main.py'
         
         # If the packaged version doesn't exist, try the local development version
         if not web_search_path.exists():
@@ -32,9 +48,18 @@ def run(inputs: dict) -> dict:
         if not web_search_path.exists():
             return {'error': 'tools/web-search package not found', 'error_type': 'search_failed'}
         
+        # Construct venv Python path
+        venv_python_path = None
+        venv_path = Path.home() / '.neuron' / 'venv' / 'tools' / 'web-search' / 'bin' / 'python3'
+        if venv_path.exists():
+            venv_python_path = venv_path
+        
+        # Use venv Python if it exists, otherwise fall back to sys.executable
+        python_executable = str(venv_python_path) if venv_python_path else sys.executable
+        
         # Run the web search tool as subprocess
         search_process = subprocess.run([
-            sys.executable, str(web_search_path)
+            python_executable, str(web_search_path)
         ], input=json.dumps(search_inputs), text=True, capture_output=True, encoding='utf-8')
         
         if search_process.returncode != 0:
