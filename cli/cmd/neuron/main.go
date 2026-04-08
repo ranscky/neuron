@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
@@ -277,6 +278,97 @@ var (
 		},
 	}
 	
+	// uninstallCmd represents the uninstall command
+	uninstallCmd = &cobra.Command{
+		Use:   "uninstall <package>",
+		Short: "Uninstall a package",
+		Long:  `Remove package from ~/.neuron/packages/, remove venv from ~/.neuron/venv/, remove entry from lockfile`,
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			packageName := args[0]
+			
+			// Get user's home directory
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to get home directory: %v\n", err)
+				os.Exit(1)
+			}
+			
+			// Remove ~/.neuron/packages/<name>/
+			packagesPath := filepath.Join(homeDir, ".neuron", "packages", packageName)
+			if err := os.RemoveAll(packagesPath); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to remove package directory: %v\n", err)
+				os.Exit(1)
+			}
+			
+			// Remove ~/.neuron/venv/<name>/
+			venvPath := filepath.Join(homeDir, ".neuron", "venv", packageName)
+			if err := os.RemoveAll(venvPath); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to remove venv directory: %v\n", err)
+				os.Exit(1)
+			}
+			
+			// Remove entry from lockfile
+			if err := lockFile.Remove(packageName); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to remove package from lockfile: %v\n", err)
+				os.Exit(1)
+			}
+			
+			fmt.Printf("Successfully uninstalled %s\n", packageName)
+		},
+	}
+	
+	// updateCmd represents the update command
+	updateCmd = &cobra.Command{
+		Use:   "update <package>",
+		Short: "Update a package to the latest version",
+		Long:  `Calls GetPackageInfo to get latest version, compares with lockfile version, if newer: installs new version, updates lockfile`,
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			packageName := args[0]
+			
+			// Get current installed version from lockfile
+			currentVersion, err := lockFile.Get(packageName)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Package %s is not installed: %v\n", packageName, err)
+				os.Exit(1)
+			}
+			
+			// Get latest version from registry
+			pkgInfo, err := registryClient.GetPackageInfo(packageName)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to get package info for %s: %v\n", packageName, err)
+				os.Exit(1)
+			}
+			
+			latestVersion := pkgInfo.Version
+			
+			// Compare versions (simplified comparison)
+			if latestVersion != currentVersion {
+				// Install the new version
+				fmt.Printf("Updating %s from %s to %s...\n", packageName, currentVersion, latestVersion)
+				
+				// Download the package
+				_, err = registryClient.Fetch(packageName, latestVersion)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to fetch package %s@%s: %v\n", packageName, latestVersion, err)
+					os.Exit(1)
+				}
+				
+				// Install the package
+				err = installerClient.Install(packageName, latestVersion)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to install package %s@%s: %v\n", packageName, latestVersion, err)
+					os.Exit(1)
+				}
+				
+				fmt.Printf("Updated %s to %s\n", packageName, latestVersion)
+			} else {
+				fmt.Printf("Already at latest version (%s)\n", currentVersion)
+			}
+		},
+	}
+	
 	// secretsCmd represents the secrets command
 	secretsCmd = &cobra.Command{
 		Use:   "secrets",
@@ -532,6 +624,8 @@ func init() {
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(searchCmd)
 	rootCmd.AddCommand(listCmd)
+	rootCmd.AddCommand(uninstallCmd)
+	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(secretsCmd)
 	rootCmd.AddCommand(configCmd)
 	

@@ -2,14 +2,23 @@ package runtime
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/ranscky/neuron/internal/config"
 )
+
+// isValidSemver checks if a string is a valid semantic version (X.Y.Z format)
+func isValidSemver(version string) bool {
+	// Regular expression for semantic versioning (X.Y.Z)
+	semverRegex := regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+	return semverRegex.MatchString(version)
+}
 
 // PythonRuntime handles Python runtime execution
 type PythonRuntime struct {
@@ -21,6 +30,55 @@ func NewPythonRuntime() *PythonRuntime {
 	return &PythonRuntime{}
 }
 
+// setupPackageVenv creates a virtual environment for a package and installs its requirements.
+func (p *PythonRuntime) setupPackageVenv(name, version string) error {
+	// Get user's home directory
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+	
+	// Create venv at ~/.neuron/venv/<name>/ (preserving scoped package paths)
+	// Replace slashes in scoped package names with underscores
+	venvName := strings.ReplaceAll(name, "/", "_")
+	venvPath := filepath.Join(homeDir, ".neuron", "venv", venvName)
+	if err := os.MkdirAll(venvPath, 0755); err != nil {
+		return fmt.Errorf("failed to create venv directory: %w", err)
+	}
+	
+	// Check if venv already exists
+	venvPythonPath := filepath.Join(venvPath, "bin", "python3")
+	if _, err := os.Stat(venvPythonPath); os.IsNotExist(err) {
+		// Create virtual environment
+		fmt.Printf("Creating virtual environment for %s...\n", name)
+		venvCmd := exec.Command("python3", "-m", "venv", venvPath)
+		if output, err := venvCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to create virtual environment: %w\nOutput: %s", err, output)
+		}
+	}
+	
+	// Install ~/.neuron/packages/<name>/<version>/requirements.txt if it exists
+	packagePath := filepath.Join(homeDir, ".neuron", "packages", name, version)
+	requirementsPath := filepath.Join(packagePath, "requirements.txt")
+	if _, err := os.Stat(requirementsPath); err == nil {
+		fmt.Printf("Installing dependencies for %s@%s...\n", name, version)
+		// Use the venv's own pip with the specified flags
+		pipCmd := exec.Command(filepath.Join(venvPath, "bin", "pip"), "install", "-r", requirementsPath, "-q", "--no-cache-dir")
+		
+		// Capture stderr separately to provide better error messages
+		var stderr bytes.Buffer
+		pipCmd.Stderr = &stderr
+		
+		// Run the command and check for errors
+		if err := pipCmd.Run(); err != nil {
+			// Return the error with the full stderr output
+			return fmt.Errorf("failed to install dependencies: %w\nStderr: %s", err, stderr.String())
+		}
+	}
+	
+	return nil
+}
+
 // Run executes the Python entry file with the given arguments and environment variables
 func (p *PythonRuntime) Run(entry string, args []string, env map[string]string) error {
 	// 1. Derive the package directory from the entry path
@@ -28,59 +86,74 @@ func (p *PythonRuntime) Run(entry string, args []string, env map[string]string) 
 	
 	// Extract package name and version from path
 	// Expected path format: ~/.neuron/packages/<name>/<version>/...
+	// For scoped packages: ~/.neuron/packages/tools/web-search/1.0.2/main.py
+	// packageName should be "tools/web-search" and packageVersion should be "1.0.2"
 	pathParts := strings.Split(packageDir, string(filepath.Separator))
 	var packageName, packageVersion string
 	
 	// Find the .neuron/packages part in the path
 	for i, part := range pathParts {
-		if part == ".neuron" && i+1 < len(pathParts) && pathParts[i+1] == "packages" && i+3 < len(pathParts) {
-			packageName = pathParts[i+2]
-			packageVersion = pathParts[i+3]
+		if part == ".neuron" && i+1 < len(pathParts) && pathParts[i+1] == "packages" {
+			// Start looking for the version after .neuron/packages
+			// Everything before the version is the package name
+			// The segment that matches semver pattern is the version
+			
+			// Collect potential package name parts
+			var nameParts []string
+			
+			// Process segments after .neuron/packages
+			for j := i + 2; j < len(pathParts); j++ {
+				segment := pathParts[j]
+				// Check if this segment is a valid semantic version
+				if isValidSemver(segment) {
+					// This segment is a valid version
+					packageVersion = segment
+					packageName = strings.Join(nameParts, "/")
+					break
+				} else {
+					// This segment is part of the package name
+					nameParts = append(nameParts, segment)
+				}
+			}
 			break
 		}
 	}
 	
+	// Fallback to original logic if we couldn't parse using the new method
 	if packageName == "" || packageVersion == "" {
-		// Fallback: try to extract from the full path
+		// Find the .neuron/packages part in the path
+		for i, part := range pathParts {
+			if part == ".neuron" && i+1 < len(pathParts) && pathParts[i+1] == "packages" && i+3 < len(pathParts) {
+				packageName = pathParts[i+2]
+				packageVersion = pathParts[i+3]
+				break
+			}
+		}
+		
+		// Final fallback: try to extract from the full path
 		// Look for pattern like .../packages/<name>/<version>/
-		parts := strings.Split(packageDir, string(filepath.Separator))
-		if len(parts) >= 2 {
-			packageVersion = parts[len(parts)-1]
-			packageName = parts[len(parts)-2]
+		if packageName == "" || packageVersion == "" {
+			parts := strings.Split(packageDir, string(filepath.Separator))
+			if len(parts) >= 2 {
+				packageVersion = parts[len(parts)-1]
+				packageName = parts[len(parts)-2]
+			}
 		}
 	}
 	
-	// Get user's home directory
-	homeDir, err := os.UserHomeDir()
+	// Setup virtual environment for the package
+	if err := p.setupPackageVenv(packageName, packageVersion); err != nil {
+		return fmt.Errorf("failed to setup virtual environment: %w", err)
+	}
+	
+	// Get the Python interpreter path using the shared utility function
+	pythonPath, err := GetPackageVenvPython(packageName, packageVersion)
 	if err != nil {
-		return fmt.Errorf("failed to get home directory: %w", err)
+		return fmt.Errorf("failed to get Python venv path: %w", err)
 	}
 	
-	// 2. Check if virtual environment exists
-	venvPath := filepath.Join(homeDir, ".neuron", "venv", packageName, packageVersion)
-	
-	// 3. If not, create virtual environment
-	if _, err := os.Stat(venvPath); os.IsNotExist(err) {
-		fmt.Printf("Creating virtual environment for %s@%s...\n", packageName, packageVersion)
-		venvCmd := exec.Command("python3", "-m", "venv", venvPath)
-		if output, err := venvCmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to create virtual environment: %w\nOutput: %s", err, output)
-		}
-	}
-	
-	// 4. Check if requirements.txt exists and install dependencies
-	requirementsPath := filepath.Join(packageDir, "requirements.txt")
-	if _, err := os.Stat(requirementsPath); err == nil {
-		fmt.Printf("Installing dependencies for %s@%s...\n", packageName, packageVersion)
-		pipCmd := exec.Command(filepath.Join(venvPath, "bin", "pip"), "install", "-r", requirementsPath, "-q")
-		if output, err := pipCmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to install dependencies: %w\nOutput: %s", err, output)
-		}
-	}
-	
-	// 5. Execute the entry file using the virtual environment's Python
+	// Execute the entry file using the virtual environment's Python
 	cmdArgs := append([]string{entry}, args...)
-	pythonPath := filepath.Join(venvPath, "bin", "python3")
 	cmd := exec.Command(pythonPath, cmdArgs...)
 	
 	// 6. Load Neuron config to determine active provider
@@ -149,9 +222,25 @@ func (p *PythonRuntime) Run(entry string, args []string, env map[string]string) 
 		// Wait for the command to finish
 		err = cmd.Wait()
 		
-		// Print stdout output
+		// Print stdout output with pretty-printing if it's JSON
 		if stdoutBuf.Len() > 0 {
-			fmt.Print(stdoutBuf.String())
+			output := stdoutBuf.String()
+			
+			// Try to parse as JSON and pretty-print if it is
+			var jsonData interface{}
+			if json.Unmarshal([]byte(output), &jsonData) == nil {
+				// It's valid JSON, pretty-print it
+				prettyJSON, err := json.MarshalIndent(jsonData, "", "  ")
+				if err == nil {
+					fmt.Println(string(prettyJSON))
+				} else {
+					// If pretty-printing fails, print as-is
+					fmt.Print(output)
+				}
+			} else {
+				// Not JSON, print as-is
+				fmt.Print(output)
+			}
 		}
 		
 		// Handle stderr and exit code
