@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/ranscky/neuron/internal/config"
 )
 
 // PythonRuntime handles Python runtime execution
@@ -81,14 +83,40 @@ func (p *PythonRuntime) Run(entry string, args []string, env map[string]string) 
 	pythonPath := filepath.Join(venvPath, "bin", "python3")
 	cmd := exec.Command(pythonPath, cmdArgs...)
 	
-	// 6. Pass env vars from the env map to the subprocess
+	// 6. Load Neuron config to determine active provider
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load Neuron config: %w", err)
+	}
+	
+	// 7. Pass env vars from the env map to the subprocess
+	envVars := os.Environ() // Start with current environment
+	
+	// Add environment variables from the passed env map
 	if env != nil {
-		envVars := os.Environ() // Start with current environment
 		for key, value := range env {
 			envVars = append(envVars, fmt.Sprintf("%s=%s", key, value))
 		}
-		cmd.Env = envVars
 	}
+	
+	// Inject provider-specific environment variables
+	envVars = append(envVars, fmt.Sprintf("NEURON_PROVIDER=%s", cfg.Provider))
+	
+	switch cfg.Provider {
+	case "ollama":
+		envVars = append(envVars, fmt.Sprintf("NEURON_OLLAMA_BASE_URL=%s", cfg.Ollama.BaseURL))
+	case "openai":
+		envVars = append(envVars, fmt.Sprintf("NEURON_OPENAI_API_KEY=%s", cfg.OpenAI.APIKey))
+		envVars = append(envVars, fmt.Sprintf("NEURON_MODEL=%s", cfg.OpenAI.Model))
+	case "anthropic":
+		envVars = append(envVars, fmt.Sprintf("NEURON_ANTHROPIC_API_KEY=%s", cfg.Anthropic.APIKey))
+		envVars = append(envVars, fmt.Sprintf("NEURON_MODEL=%s", cfg.Anthropic.Model))
+	case "groq":
+		envVars = append(envVars, fmt.Sprintf("NEURON_GROQ_API_KEY=%s", cfg.Groq.APIKey))
+		envVars = append(envVars, fmt.Sprintf("NEURON_MODEL=%s", cfg.Groq.Model))
+	}
+	
+	cmd.Env = envVars
 	
 	// 7. Handle stdin - pipe JSON args to subprocess stdin
 	if len(args) > 0 {

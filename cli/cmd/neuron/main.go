@@ -6,6 +6,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/ranscky/neuron/internal/config"
 	"github.com/ranscky/neuron/pkg/installer"
 	"github.com/ranscky/neuron/pkg/manifest"
 	"github.com/ranscky/neuron/pkg/registry"
@@ -329,6 +330,145 @@ var (
 			fmt.Println(value)
 		},
 	}
+	
+	// configCmd represents the config command
+	configCmd = &cobra.Command{
+		Use:   "config",
+		Short: "Manage Neuron configuration",
+		Long:  `Manage Neuron configuration including AI provider settings`,
+	}
+	
+	// configSetCmd represents the config set command
+	configSetCmd = &cobra.Command{
+		Use:   "set <key> <value>",
+		Short: "Set a configuration value",
+		Long:  `Set a configuration value. Valid keys: provider, ollama.base_url, openai.api_key, openai.model, anthropic.api_key, anthropic.model, groq.api_key, groq.model`,
+		Args:  cobra.ExactArgs(2),
+		Run: func(cmd *cobra.Command, args []string) {
+			key := args[0]
+			value := args[1]
+			
+			// Load current config
+			cfg, err := config.LoadConfig()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+				os.Exit(1)
+			}
+			
+			// Set the config value based on key
+			switch key {
+			case "provider":
+				cfg.Provider = value
+			case "ollama.base_url":
+				cfg.Ollama.BaseURL = value
+			case "openai.api_key":
+				cfg.OpenAI.APIKey = value
+			case "openai.model":
+				cfg.OpenAI.Model = value
+			case "anthropic.api_key":
+				cfg.Anthropic.APIKey = value
+			case "anthropic.model":
+				cfg.Anthropic.Model = value
+			case "groq.api_key":
+				cfg.Groq.APIKey = value
+			case "groq.model":
+				cfg.Groq.Model = value
+			default:
+				fmt.Fprintf(os.Stderr, "Invalid config key: %s\n", key)
+				os.Exit(1)
+			}
+			
+			// Save the updated config
+			if err := config.SaveConfig(cfg); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to save config: %v\n", err)
+				os.Exit(1)
+			}
+			
+			fmt.Printf("Successfully set %s\n", key)
+		},
+	}
+	
+	// configGetCmd represents the config get command
+	configGetCmd = &cobra.Command{
+		Use:   "get <key>",
+		Short: "Get a configuration value",
+		Long:  `Get a configuration value. Valid keys: provider, ollama.base_url, openai.api_key, openai.model, anthropic.api_key, anthropic.model, groq.api_key, groq.model`,
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			key := args[0]
+			
+			// Load current config
+			cfg, err := config.LoadConfig()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+				os.Exit(1)
+			}
+			
+			// Get the config value based on key
+			var value string
+			switch key {
+			case "provider":
+				value = cfg.Provider
+			case "ollama.base_url":
+				value = cfg.Ollama.BaseURL
+			case "openai.api_key":
+				value = cfg.OpenAI.APIKey
+			case "openai.model":
+				value = cfg.OpenAI.Model
+			case "anthropic.api_key":
+				value = cfg.Anthropic.APIKey
+			case "anthropic.model":
+				value = cfg.Anthropic.Model
+			case "groq.api_key":
+				value = cfg.Groq.APIKey
+			case "groq.model":
+				value = cfg.Groq.Model
+			default:
+				fmt.Fprintf(os.Stderr, "Invalid config key: %s\n", key)
+				os.Exit(1)
+			}
+			
+			fmt.Println(value)
+		},
+	}
+	
+	// configShowCmd represents the config show command
+	configShowCmd = &cobra.Command{
+		Use:   "show",
+		Short: "Show all configuration values",
+		Long:  `Show all configuration values with API keys masked`,
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			// Load current config
+			cfg, err := config.LoadConfig()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+				os.Exit(1)
+			}
+			
+			// Mask API keys for display
+			maskedCfg := *cfg
+			if len(maskedCfg.OpenAI.APIKey) > 4 {
+				maskedCfg.OpenAI.APIKey = "sk-..." + maskedCfg.OpenAI.APIKey[len(maskedCfg.OpenAI.APIKey)-4:]
+			}
+			if len(maskedCfg.Anthropic.APIKey) > 4 {
+				maskedCfg.Anthropic.APIKey = "sk-..." + maskedCfg.Anthropic.APIKey[len(maskedCfg.Anthropic.APIKey)-4:]
+			}
+			if len(maskedCfg.Groq.APIKey) > 4 {
+				maskedCfg.Groq.APIKey = "gsk_..." + maskedCfg.Groq.APIKey[len(maskedCfg.Groq.APIKey)-4:]
+			}
+			
+			// Print the configuration
+			fmt.Printf("Provider: %s\n", maskedCfg.Provider)
+			fmt.Printf("Ollama Base URL: %s\n", maskedCfg.Ollama.BaseURL)
+			fmt.Printf("OpenAI API Key: %s\n", maskedCfg.OpenAI.APIKey)
+			fmt.Printf("OpenAI Model: %s\n", maskedCfg.OpenAI.Model)
+			fmt.Printf("Anthropic API Key: %s\n", maskedCfg.Anthropic.APIKey)
+			fmt.Printf("Anthropic Model: %s\n", maskedCfg.Anthropic.Model)
+			fmt.Printf("Groq API Key: %s\n", maskedCfg.Groq.APIKey)
+			fmt.Printf("Groq Model: %s\n", maskedCfg.Groq.Model)
+		},
+	}
 )
 
 // resolveVersionConstraint resolves a version constraint to an actual version
@@ -393,10 +533,16 @@ func init() {
 	rootCmd.AddCommand(searchCmd)
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(secretsCmd)
+	rootCmd.AddCommand(configCmd)
 	
 	// Add subcommands to secretsCmd
 	secretsCmd.AddCommand(secretsSetCmd)
 	secretsCmd.AddCommand(secretsGetCmd)
+	
+	// Add subcommands to configCmd
+	configCmd.AddCommand(configSetCmd)
+	configCmd.AddCommand(configGetCmd)
+	configCmd.AddCommand(configShowCmd)
 }
 
 func main() {

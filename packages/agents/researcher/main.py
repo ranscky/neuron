@@ -3,7 +3,129 @@ import json
 import subprocess
 import urllib.request
 import urllib.error
+import os
 from pathlib import Path
+
+
+def call_model(prompt: str, system: str = "You are a helpful assistant") -> str:
+    """
+    Call the configured model with prompt and system message.
+    Supports Ollama, OpenAI, Anthropic, and Groq providers.
+    """
+    # Determine which provider to use based on environment or configuration
+    provider = os.getenv('NEURON_MODEL_PROVIDER', 'ollama').lower()
+    
+    if provider == 'ollama':
+        return _call_ollama(prompt, system)
+    elif provider == 'openai':
+        return _call_openai(prompt, system)
+    elif provider == 'anthropic':
+        return _call_anthropic(prompt, system)
+    elif provider == 'groq':
+        return _call_groq(prompt, system)
+    else:
+        # Default to Ollama if unknown provider
+        return _call_ollama(prompt, system)
+
+
+def _call_ollama(prompt: str, system: str) -> str:
+    """Call Ollama model"""
+    try:
+        full_prompt = f"{system}\n\n{prompt}" if system else prompt
+        url = "http://localhost:11434/api/generate"
+        data = {
+            "model": "qwen3-coder:480b-cloud",
+            "prompt": full_prompt,
+            "stream": False
+        }
+        
+        json_data = json.dumps(data).encode('utf-8')
+        req = urllib.request.Request(
+            url,
+            data=json_data,
+            headers={'Content-Type': 'application/json'}
+        )
+        
+        with urllib.request.urlopen(req) as response:
+            response_data = json.loads(response.read().decode('utf-8'))
+            return response_data.get('response', '')
+            
+    except Exception as e:
+        raise Exception(f'Ollama API error: {str(e)}')
+
+
+def _call_openai(prompt: str, system: str) -> str:
+    """Call OpenAI model"""
+    try:
+        import openai
+        client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        
+        response = client.chat.completions.create(
+            model="gpt-4-turbo",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=2048
+        )
+        
+        return response.choices[0].message.content
+        
+    except ImportError:
+        raise Exception("OpenAI library not installed. Please install with: pip install openai")
+    except Exception as e:
+        raise Exception(f'OpenAI API error: {str(e)}')
+
+
+def _call_anthropic(prompt: str, system: str) -> str:
+    """Call Anthropic model"""
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
+        
+        full_prompt = f"{system}\n\n{prompt}" if system else prompt
+        response = client.completions.create(
+            model="claude-3-opus-20240229",
+            prompt=full_prompt,
+            max_tokens_to_sample=2048,
+            temperature=0.7
+        )
+        
+        return response.completion
+        
+    except ImportError:
+        raise Exception("Anthropic library not installed. Please install with: pip install anthropic")
+    except Exception as e:
+        raise Exception(f'Anthropic API error: {str(e)}')
+
+
+def _call_groq(prompt: str, system: str) -> str:
+    """Call Groq model"""
+    try:
+        import groq
+        client = groq.Groq(api_key=os.getenv('GROQ_API_KEY'))
+        
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        
+        response = client.chat.completions.create(
+            model="mixtral-8x7b-32768",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=2048
+        )
+        
+        return response.choices[0].message.content
+        
+    except ImportError:
+        raise Exception("Groq library not installed. Please install with: pip install groq")
+    except Exception as e:
+        raise Exception(f'Groq API error: {str(e)}')
 
 
 def run(inputs: dict) -> dict:
@@ -85,7 +207,7 @@ def run(inputs: dict) -> dict:
 
 
 def synthesize_research(query: str, search_results: list) -> dict:
-    """Synthesize research results using Ollama"""
+    """Synthesize research results using the shared model utility"""
     try:
         # Prepare context from search results
         context_parts = []
@@ -94,7 +216,7 @@ def synthesize_research(query: str, search_results: list) -> dict:
         
         context = "\n\n".join(context_parts)
         
-        # Prepare the prompt for Ollama
+        # Prepare the prompt
         prompt = f"""Research Query: {query}
 
 Web Search Results:
@@ -107,54 +229,23 @@ Please synthesize a structured research summary with these sections:
 
 Format the response as JSON with keys: overview, key_findings, sources"""
 
-        # Call Ollama API
-        url = "http://localhost:11434/api/generate"
-        data = {
-            "model": "qwen3-coder:480b-cloud",
-            "prompt": prompt,
-            "stream": False,
-            "format": "json"
-        }
+        # Use the shared model utility with the specified system prompt
+        system_prompt = "You are a research analyst. Synthesize findings into a structured summary with overview, key findings and sources."
+        response_text = call_model(prompt, system_prompt)
         
-        # Convert to JSON and encode
-        json_data = json.dumps(data).encode('utf-8')
-        
-        # Create request
-        req = urllib.request.Request(
-            url,
-            data=json_data,
-            headers={'Content-Type': 'application/json'}
-        )
-        
-        # Make the request
-        with urllib.request.urlopen(req) as response:
-            response_data = json.loads(response.read().decode('utf-8'))
-            
-        # Extract and parse the response
-        if 'response' in response_data:
-            try:
-                # Try to parse the response as JSON
-                synthesized = json.loads(response_data['response'])
-                return synthesized
-            except json.JSONDecodeError:
-                # If not valid JSON, return as plain text in a structured format
-                return {
-                    'overview': 'Research summary',
-                    'key_findings': response_data['response'],
-                    'sources': [f"Source {i+1}: {result.get('title', '')} - {result.get('url', '')}" 
-                               for i, result in enumerate(search_results[:3])]
-                }
-        else:
-            # Fallback response structure
+        # Try to parse the response as JSON
+        try:
+            synthesized = json.loads(response_text)
+            return synthesized
+        except json.JSONDecodeError:
+            # If not valid JSON, return as plain text in a structured format
             return {
-                'overview': f'Research on "{query}"',
-                'key_findings': 'Synthesized findings from web search results',
+                'overview': 'Research summary',
+                'key_findings': response_text,
                 'sources': [f"Source {i+1}: {result.get('title', '')} - {result.get('url', '')}" 
                            for i, result in enumerate(search_results[:3])]
             }
             
-    except urllib.error.URLError as e:
-        raise Exception(f'Ollama API error: {str(e)}')
     except Exception as e:
         raise Exception(f'Synthesis error: {str(e)}')
 
