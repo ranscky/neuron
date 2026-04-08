@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/ranscky/neuron/internal/config"
+	"github.com/ranscky/neuron/pkg/installer"
+	"github.com/ranscky/neuron/pkg/manifest"
 )
 
 // isValidSemver checks if a string is a valid semantic version (X.Y.Z format)
@@ -144,6 +146,37 @@ func (p *PythonRuntime) Run(entry string, args []string, env map[string]string) 
 	// Setup virtual environment for the package
 	if err := p.setupPackageVenv(packageName, packageVersion); err != nil {
 		return fmt.Errorf("failed to setup virtual environment: %w", err)
+	}
+	
+	// Read neuron.json from the package directory to get dependencies
+	manifestPath := filepath.Join(packageDir, "neuron.json")
+	if _, err := os.Stat(manifestPath); err == nil {
+		// Parse the manifest to get dependencies
+		pkgManifest, err := manifest.ParseManifest(manifestPath)
+		if err != nil {
+			return fmt.Errorf("failed to parse neuron.json: %w", err)
+		}
+		
+		// If the package has dependencies, set up venvs for them
+		if pkgManifest.Dependencies != nil && len(pkgManifest.Dependencies) > 0 {
+			// Create lockfile instance to check installed versions
+			lockfile, err := installer.NewLockfile()
+			if err != nil {
+				return fmt.Errorf("failed to initialize lockfile: %w", err)
+			}
+			
+			// For each dependency, check if it's installed and set up its venv
+			for depName := range pkgManifest.Dependencies {
+				// Check if the dependency is installed by looking it up in the lockfile
+				depVersion, err := lockfile.Get(depName)
+				if err == nil {
+					// Dependency is installed, set up its venv
+					if err := p.setupPackageVenv(depName, depVersion); err != nil {
+						fmt.Printf("Warning: failed to setup virtual environment for dependency %s: %v\n", depName, err)
+					}
+				}
+			}
+		}
 	}
 	
 	// Get the Python interpreter path using the shared utility function
