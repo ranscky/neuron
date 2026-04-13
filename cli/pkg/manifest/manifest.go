@@ -12,6 +12,13 @@ type MCPConfig struct {
 	Server     string `json:"server,omitempty"`
 }
 
+// MCPServerConfig represents the configuration for an MCP server
+type MCPServerConfig struct {
+	Command string            `json:"command"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+}
+
 // CapabilityInput represents an input parameter for a capability
 type CapabilityInput struct {
 	Name     string      `json:"name"`
@@ -53,6 +60,7 @@ type Manifest struct {
 	Models       []Model           `json:"models,omitempty"`
 	Dependencies map[string]string `json:"dependencies,omitempty"`
 	MCP          MCPConfig         `json:"mcp,omitempty"`
+	MCPServer    *MCPServerConfig  `json:"mcp_server,omitempty"`
 	Capability   *Capability       `json:"capability,omitempty"`
 	Performance  *Performance      `json:"performance,omitempty"`
 }

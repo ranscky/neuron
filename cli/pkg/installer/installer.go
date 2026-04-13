@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ranscky/neuron/pkg/manifest"
 	"github.com/ranscky/neuron/pkg/registry"
 )
 // Installer handles downloading and installing packages
@@ -143,10 +144,24 @@ func (i *Installer) extractPackage(reader io.Reader, targetDir string) error {
 		}
 	}
 	
-	// Verify main.py exists
-	mainPyPath := filepath.Join(targetDir, "main.py")
-	if _, err := os.Stat(mainPyPath); os.IsNotExist(err) {
-		return fmt.Errorf("main.py not found in extracted package")
+	// Verify neuron.json exists
+	neuronJsonPath := filepath.Join(targetDir, "neuron.json")
+	if _, err := os.Stat(neuronJsonPath); os.IsNotExist(err) {
+		return fmt.Errorf("neuron.json not found in extracted package")
+	}
+
+	// Parse the manifest to check runtime
+	manifest, err := manifest.ParseManifest(neuronJsonPath)
+	if err != nil {
+		return fmt.Errorf("failed to parse neuron.json: %w", err)
+	}
+
+	// Only check for main.py if runtime is python
+	if manifest.Runtime == "python" {
+		mainPyPath := filepath.Join(targetDir, "main.py")
+		if _, err := os.Stat(mainPyPath); os.IsNotExist(err) {
+			return fmt.Errorf("main.py not found in extracted package (required for python runtime)")
+		}
 	}
 	
 	return nil

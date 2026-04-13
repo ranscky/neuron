@@ -10,6 +10,7 @@ import (
 	"github.com/ranscky/neuron/internal/config"
 	"github.com/ranscky/neuron/pkg/installer"
 	"github.com/ranscky/neuron/pkg/manifest"
+	"github.com/ranscky/neuron/pkg/mcp"
 	"github.com/ranscky/neuron/pkg/registry"
 	"github.com/ranscky/neuron/pkg/runtime"
 	"github.com/ranscky/neuron/pkg/secrets"
@@ -76,6 +77,63 @@ var (
 			}
 			
 			fmt.Printf("Successfully installed %s@%s\n", name, resolvedVersion)
+			
+			// Check if package has MCP server configuration
+			// Get the user's home directory
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to get home directory: %v\n", err)
+				return
+			}
+			
+			// Construct the package path
+			packagePath := fmt.Sprintf("%s/.neuron/packages/%s/%s", homeDir, name, resolvedVersion)
+			manifestPath := fmt.Sprintf("%s/neuron.json", packagePath)
+			
+			// Parse the package's manifest
+			pkgManifest, err := manifest.ParseManifest(manifestPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to parse manifest for package %s: %v\n", name, err)
+				return
+			}
+			
+			// Check if manifest has MCP server configuration
+			if pkgManifest.MCPServer != nil {
+				// Detect MCP clients
+				clients, err := mcp.DetectClients()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to detect MCP clients: %v\n", err)
+					return
+				}
+				
+				if len(clients) == 0 {
+					fmt.Println("No MCP clients detected. Manually add to your AI client config.")
+					return
+				}
+				
+				// Build server config from manifest
+				serverConfig := map[string]interface{}{
+					"command": pkgManifest.MCPServer.Command,
+				}
+				
+				if len(pkgManifest.MCPServer.Args) > 0 {
+					serverConfig["args"] = pkgManifest.MCPServer.Args
+				}
+				
+				if len(pkgManifest.MCPServer.Env) > 0 {
+					serverConfig["env"] = pkgManifest.MCPServer.Env
+				}
+				
+				// Inject MCP server configuration for each detected client
+				for _, client := range clients {
+					err := mcp.InjectMCPServer(client, name, serverConfig)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Failed to configure %s in %s: %v\n", name, client.Name, err)
+					} else {
+						fmt.Printf("Configured %s in %s\n", name, client.Name)
+					}
+				}
+			}
 		},
 	}
 	
@@ -637,6 +695,99 @@ func init() {
 	configCmd.AddCommand(configSetCmd)
 	configCmd.AddCommand(configGetCmd)
 	configCmd.AddCommand(configShowCmd)
+	
+	// Create mcp command
+	mcpCmd := &cobra.Command{
+		Use:   "mcp",
+		Short: "Manage MCP servers",
+		Long:  `Manage MCP servers for AI clients`,
+	}
+	
+	// Create mcp list command
+	mcpListCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List configured MCP servers",
+		Long:  `Show all MCP servers currently configured across all detected clients`,
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			// Detect MCP clients
+			clients, err := mcp.DetectClients()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to detect MCP clients: %v\n", err)
+				os.Exit(1)
+			}
+			
+			if len(clients) == 0 {
+				fmt.Println("No MCP clients detected.")
+				return
+			}
+			
+			// For each detected client, read its config file and print mcpServers entries
+			for _, client := range clients {
+				fmt.Printf("=== %s ===\n", client.Name)
+				
+				// Read the config file
+				configData, err := mcp.ReadConfigFile(client.ConfigPath)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to read config for %s: %v\n", client.Name, err)
+					continue
+				}
+				
+				// Print the mcpServers entries based on client format
+				switch client.Format {
+				case "cline", "windsurf":
+					if mcpServers, ok := configData["mcpServers"].(map[string]interface{}); ok {
+						if len(mcpServers) == 0 {
+							fmt.Println("No MCP servers configured.")
+						} else {
+							for serverName := range mcpServers {
+								fmt.Printf("- %s\n", serverName)
+							}
+						}
+					} else {
+						fmt.Println("No MCP servers configured.")
+					}
+					
+				case "claude_code":
+					// Check for projects with mcpServers
+					if projects, ok := configData["projects"].(map[string]interface{}); ok && len(projects) > 0 {
+						foundServers := false
+						for projectName, projectData := range projects {
+							if projectMap, isMap := projectData.(map[string]interface{}); isMap {
+								if mcpServers, ok := projectMap["mcpServers"].(map[string]interface{}); ok {
+									for serverName := range mcpServers {
+										fmt.Printf("- %s (project: %s)\n", serverName, projectName)
+										foundServers = true
+									}
+								}
+							}
+						}
+						if !foundServers {
+							fmt.Println("No MCP servers configured.")
+						}
+					} else {
+						// Check for root level mcpServers
+						if mcpServers, ok := configData["mcpServers"].(map[string]interface{}); ok {
+							if len(mcpServers) == 0 {
+								fmt.Println("No MCP servers configured.")
+							} else {
+								for serverName := range mcpServers {
+									fmt.Printf("- %s\n", serverName)
+								}
+							}
+						} else {
+							fmt.Println("No MCP servers configured.")
+						}
+					}
+				}
+				fmt.Println()
+			}
+		},
+	}
+	
+	// Add mcp commands
+	mcpCmd.AddCommand(mcpListCmd)
+	rootCmd.AddCommand(mcpCmd)
 }
 
 func main() {
