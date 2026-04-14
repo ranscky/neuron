@@ -7,6 +7,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/fatih/color"
 	"github.com/ranscky/neuron/internal/config"
 	"github.com/ranscky/neuron/pkg/installer"
 	"github.com/ranscky/neuron/pkg/manifest"
@@ -14,6 +15,7 @@ import (
 	"github.com/ranscky/neuron/pkg/registry"
 	"github.com/ranscky/neuron/pkg/runtime"
 	"github.com/ranscky/neuron/pkg/secrets"
+	"github.com/ranscky/neuron/pkg/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -60,23 +62,28 @@ var (
 				os.Exit(1)
 			}
 			
+			// Create spinner for fetching
+			s := ui.NewSpinner("Fetching " + name + "...")
+			ui.StartSpinner(s)
+			
 			// Download the package
-			fmt.Printf("Fetching package %s@%s...\n", name, resolvedVersion)
+			s.Suffix = " Downloading..."
 			_, err = registryClient.Fetch(name, resolvedVersion)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to fetch package %s@%s: %v\n", name, resolvedVersion, err)
+				ui.FailSpinner(s, fmt.Sprintf("Failed to fetch package %s@%s: %v", name, resolvedVersion, err))
 				os.Exit(1)
 			}
 			
 			// Install the package
-			fmt.Printf("Installing package %s@%s...\n", name, resolvedVersion)
+			s.Suffix = " Installing..."
 			err = installerClient.Install(name, resolvedVersion)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to install package %s@%s: %v\n", name, resolvedVersion, err)
+				ui.FailSpinner(s, fmt.Sprintf("Failed to install package %s@%s: %v", name, resolvedVersion, err))
 				os.Exit(1)
 			}
 			
-			fmt.Printf("Successfully installed %s@%s\n", name, resolvedVersion)
+			ui.StopSpinner(s, "Installed "+name+"@"+resolvedVersion)
+			ui.Step("Run it: neuron run " + name + " '{...}'")
 			
 			// Check if package has MCP server configuration
 			// Get the user's home directory
@@ -144,25 +151,27 @@ var (
 		Long:  `Validate neuron.json via ParseManifest, tar.gz current dir via PublishPackage, upload via RegistryClient.Publish`,
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("Validating neuron.json...")
+			ui.Info("Validating neuron.json...")
 			
 			// Validate manifest
 			_, err := manifest.ParseManifest("neuron.json")
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to validate neuron.json: %v\n", err)
+				ui.Error(fmt.Sprintf("Failed to validate neuron.json: %v", err))
 				os.Exit(1)
 			}
 			
-			fmt.Println("Creating package archive...")
+			// Create spinner for archiving
+			s := ui.NewSpinner("Creating package archive...")
+			ui.StartSpinner(s)
 			
 			// Publish package
 			err = registry.PublishPackage(registryClient)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to publish package: %v\n", err)
+				ui.FailSpinner(s, fmt.Sprintf("Failed to publish package: %v", err))
 				os.Exit(1)
 			}
 			
-			fmt.Println("Successfully published package!")
+			ui.StopSpinner(s, "Successfully published package!")
 		},
 	}
 	
@@ -270,13 +279,20 @@ var (
 			// Construct entry point path
 			entryPoint := fmt.Sprintf("%s/%s", packagePath, pkgManifest.Entry)
 			
-			// Run the package
-			fmt.Printf("Running %s@%s...\n", packageName, version)
+			// Show info message
+			ui.Info(fmt.Sprintf("Running %s@%s", packageName, version))
+			
+			// Create spinner for venv creation and dep install
+			s := ui.NewSpinner("Preparing environment...")
+			ui.StartSpinner(s)
+			
 			err = rt.Run(entryPoint, runArgs, env)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to run package %s: %v\n", packageName, err)
+				ui.FailSpinner(s, fmt.Sprintf("Failed to run package %s: %v", packageName, err))
 				os.Exit(1)
 			}
+			
+			ui.StopSpinner(s, "Package executed successfully")
 		},
 	}
 	
@@ -289,12 +305,19 @@ var (
 		Run: func(cmd *cobra.Command, args []string) {
 			query := args[0]
 			
+			// Create spinner for searching
+			s := ui.NewSpinner("Searching...")
+			ui.StartSpinner(s)
+			
 			// Search the registry
 			results, err := registryClient.Search(query)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to search registry: %v\n", err)
+				ui.FailSpinner(s, fmt.Sprintf("Failed to search registry: %v", err))
 				os.Exit(1)
 			}
+			
+			// Stop spinner
+			s.Stop()
 			
 			// Print results in a table format
 			if len(results) == 0 {
@@ -305,7 +328,11 @@ var (
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
 			fmt.Fprintln(w, "NAME\tVERSION\tDESCRIPTION")
 			for _, pkg := range results {
-				fmt.Fprintf(w, "%s\t%s\t%s\n", pkg.Name, pkg.Version, pkg.Description)
+				// Print NAME in cyan, VERSION in yellow, DESCRIPTION in white
+				fmt.Fprintf(w, "%s\t%s\t%s\n", 
+					color.CyanString(pkg.Name), 
+					color.YellowString(pkg.Version), 
+					pkg.Description)
 			}
 			w.Flush()
 		},
@@ -450,11 +477,11 @@ var (
 			// Set the secret
 			err := store.Set(key, value)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to set secret: %v\n", err)
+				ui.Error(fmt.Sprintf("Failed to set secret: %v", err))
 				os.Exit(1)
 			}
 			
-			fmt.Printf("Successfully set secret '%s'\n", key)
+			ui.Success("Secret stored")
 		},
 	}
 	
@@ -473,10 +500,11 @@ var (
 			// Get the secret
 			value, err := store.Get(key)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to get secret: %v\n", err)
+				ui.Error(fmt.Sprintf("Failed to get secret: %v", err))
 				os.Exit(1)
 			}
 			
+			// Print value in white
 			fmt.Println(value)
 		},
 	}
@@ -501,7 +529,7 @@ var (
 			// Load current config
 			cfg, err := config.LoadConfig()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+				ui.Error(fmt.Sprintf("Failed to load config: %v", err))
 				os.Exit(1)
 			}
 			
@@ -524,17 +552,17 @@ var (
 			case "groq.model":
 				cfg.Groq.Model = value
 			default:
-				fmt.Fprintf(os.Stderr, "Invalid config key: %s\n", key)
+				ui.Error(fmt.Sprintf("Invalid config key: %s", key))
 				os.Exit(1)
 			}
 			
 			// Save the updated config
 			if err := config.SaveConfig(cfg); err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to save config: %v\n", err)
+				ui.Error(fmt.Sprintf("Failed to save config: %v", err))
 				os.Exit(1)
 			}
 			
-			fmt.Printf("Successfully set %s\n", key)
+			ui.Success("Config updated")
 		},
 	}
 	
@@ -550,7 +578,7 @@ var (
 			// Load current config
 			cfg, err := config.LoadConfig()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+				ui.Error(fmt.Sprintf("Failed to load config: %v", err))
 				os.Exit(1)
 			}
 			
@@ -574,7 +602,7 @@ var (
 			case "groq.model":
 				value = cfg.Groq.Model
 			default:
-				fmt.Fprintf(os.Stderr, "Invalid config key: %s\n", key)
+				ui.Error(fmt.Sprintf("Invalid config key: %s", key))
 				os.Exit(1)
 			}
 			
@@ -592,7 +620,7 @@ var (
 			// Load current config
 			cfg, err := config.LoadConfig()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+				ui.Error(fmt.Sprintf("Failed to load config: %v", err))
 				os.Exit(1)
 			}
 			
@@ -608,15 +636,15 @@ var (
 				maskedCfg.Groq.APIKey = "gsk_..." + maskedCfg.Groq.APIKey[len(maskedCfg.Groq.APIKey)-4:]
 			}
 			
-			// Print the configuration
-			fmt.Printf("Provider: %s\n", maskedCfg.Provider)
-			fmt.Printf("Ollama Base URL: %s\n", maskedCfg.Ollama.BaseURL)
-			fmt.Printf("OpenAI API Key: %s\n", maskedCfg.OpenAI.APIKey)
-			fmt.Printf("OpenAI Model: %s\n", maskedCfg.OpenAI.Model)
-			fmt.Printf("Anthropic API Key: %s\n", maskedCfg.Anthropic.APIKey)
-			fmt.Printf("Anthropic Model: %s\n", maskedCfg.Anthropic.Model)
-			fmt.Printf("Groq API Key: %s\n", maskedCfg.Groq.APIKey)
-			fmt.Printf("Groq Model: %s\n", maskedCfg.Groq.Model)
+			// Print the configuration with keys in cyan and values in white, mask API keys
+			fmt.Printf("%s: %s\n", color.CyanString("Provider"), maskedCfg.Provider)
+			fmt.Printf("%s: %s\n", color.CyanString("Ollama Base URL"), maskedCfg.Ollama.BaseURL)
+			fmt.Printf("%s: %s\n", color.CyanString("OpenAI API Key"), maskedCfg.OpenAI.APIKey)
+			fmt.Printf("%s: %s\n", color.CyanString("OpenAI Model"), maskedCfg.OpenAI.Model)
+			fmt.Printf("%s: %s\n", color.CyanString("Anthropic API Key"), maskedCfg.Anthropic.APIKey)
+			fmt.Printf("%s: %s\n", color.CyanString("Anthropic Model"), maskedCfg.Anthropic.Model)
+			fmt.Printf("%s: %s\n", color.CyanString("Groq API Key"), maskedCfg.Groq.APIKey)
+			fmt.Printf("%s: %s\n", color.CyanString("Groq Model"), maskedCfg.Groq.Model)
 		},
 	}
 )
@@ -713,7 +741,7 @@ func init() {
 			// Detect MCP clients
 			clients, err := mcp.DetectClients()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to detect MCP clients: %v\n", err)
+				ui.Error(fmt.Sprintf("Failed to detect MCP clients: %v", err))
 				os.Exit(1)
 			}
 			
@@ -724,12 +752,13 @@ func init() {
 			
 			// For each detected client, read its config file and print mcpServers entries
 			for _, client := range clients {
-				fmt.Printf("=== %s ===\n", client.Name)
+				// Print client names in cyan
+				fmt.Printf("=== %s ===\n", color.CyanString(client.Name))
 				
 				// Read the config file
 				configData, err := mcp.ReadConfigFile(client.ConfigPath)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "Failed to read config for %s: %v\n", client.Name, err)
+					ui.Warn(fmt.Sprintf("Failed to read config for %s: %v", client.Name, err))
 					continue
 				}
 				
@@ -740,6 +769,7 @@ func init() {
 						if len(mcpServers) == 0 {
 							fmt.Println("No MCP servers configured.")
 						} else {
+							// Print server names in white
 							for serverName := range mcpServers {
 								fmt.Printf("- %s\n", serverName)
 							}
@@ -755,6 +785,7 @@ func init() {
 						for projectName, projectData := range projects {
 							if projectMap, isMap := projectData.(map[string]interface{}); isMap {
 								if mcpServers, ok := projectMap["mcpServers"].(map[string]interface{}); ok {
+									// Print server names in white
 									for serverName := range mcpServers {
 										fmt.Printf("- %s (project: %s)\n", serverName, projectName)
 										foundServers = true
@@ -771,6 +802,7 @@ func init() {
 							if len(mcpServers) == 0 {
 								fmt.Println("No MCP servers configured.")
 							} else {
+								// Print server names in white
 								for serverName := range mcpServers {
 									fmt.Printf("- %s\n", serverName)
 								}
@@ -785,8 +817,37 @@ func init() {
 		},
 	}
 	
+	// Create mcp remove command
+	mcpRemoveCmd := &cobra.Command{
+		Use:   "remove <package>",
+		Short: "Remove an MCP server from all clients",
+		Long:  `Remove an MCP server configuration from all detected MCP clients`,
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			packageName := args[0]
+			
+			// Detect MCP clients
+			clients, err := mcp.DetectClients()
+			if err != nil {
+				ui.Error(fmt.Sprintf("Failed to detect MCP clients: %v", err))
+				os.Exit(1)
+			}
+			
+			// Remove MCP server configuration for each detected client
+			for _, client := range clients {
+				err := mcp.RemoveMCPServer(client, packageName)
+				if err != nil {
+					// Skip silently if there's an error (package not found or other issues)
+					continue
+				}
+				ui.Success(fmt.Sprintf("Removed %s from %s", packageName, client.Name))
+			}
+		},
+	}
+	
 	// Add mcp commands
 	mcpCmd.AddCommand(mcpListCmd)
+	mcpCmd.AddCommand(mcpRemoveCmd)
 	rootCmd.AddCommand(mcpCmd)
 }
 
