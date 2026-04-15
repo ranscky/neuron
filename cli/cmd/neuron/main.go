@@ -1,12 +1,16 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
+	"github.com/AlecAivazis/survey/v2"
 	"github.com/fatih/color"
 	"github.com/ranscky/neuron/internal/config"
 	"github.com/ranscky/neuron/pkg/installer"
@@ -647,7 +651,261 @@ var (
 			fmt.Printf("%s: %s\n", color.CyanString("Groq Model"), maskedCfg.Groq.Model)
 		},
 	}
+	
+	// initCmd represents the init command
+	initCmd = &cobra.Command{
+		Use:   "init",
+		Short: "Initialize Neuron configuration",
+		Long:  `Initialize Neuron configuration with AI provider settings`,
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			// Print ASCII logo in cyan
+			logo := `  ███╗   ██╗███████╗██╗   ██╗██████╗  ██████╗ ███╗   ██╗
+  ████╗  ██║██╔════╝██║   ██║██╔══██╗██╔═══██╗████╗  ██║
+  ██╔██╗ ██║█████╗  ██║   ██║██████╔╝██║   ██║██╔██╗ ██║
+  ██║╚██╗██║██╔══╝  ██║   ██║██╔══██╗██║   ██║██║╚██╗██║
+  ██║ ╚████║███████╗╚██████╔╝██║  ██║╚██████╔╝██║ ╚████║
+  ╚═╝  ╚═══╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝`
+			
+			fmt.Println(color.CyanString(logo))
+			
+			// Print tagline in white
+			fmt.Println("The package manager for AI agents and MCP servers.")
+			
+			// Print empty line
+			fmt.Println()
+			
+			// Print setup message
+			fmt.Println("Let's get you set up. This takes about 30 seconds.")
+			fmt.Println()
+			
+			// Provider selection
+			providerOptions := []string{
+				"Ollama (local, free)",
+				"OpenAI",
+				"Anthropic (Claude)",
+				"Groq",
+				"─────────────────────", // separator
+				"OpenRouter [coming soon]",
+				"Google Gemini [coming soon]",
+				"Mistral [coming soon]",
+				"Together AI [coming soon]",
+			}
+			
+			var provider string
+			for {
+				prompt := &survey.Select{
+					Message: "Select your AI provider",
+					Options: providerOptions,
+					Default: "Ollama (local, free)",
+				}
+				
+				err := survey.AskOne(prompt, &provider)
+				if err != nil {
+					ui.Error(fmt.Sprintf("Failed to get provider selection: %v", err))
+					os.Exit(1)
+				}
+				
+				// Check if user selected a coming soon option
+				if strings.Contains(provider, "[coming soon]") {
+					ui.Warn("That provider is coming soon. Please select an available provider.")
+					continue
+				}
+				break
+			}
+			
+			// Create config
+			cfg := config.DefaultConfig()
+			
+			// Provider-specific configuration
+			switch provider {
+			case "Ollama (local, free)":
+				cfg.Provider = "ollama"
+				
+				// Get base URL
+				baseURL := ""
+				prompt := &survey.Input{
+					Message: "Enter Ollama base URL",
+					Default: "http://localhost:11434",
+				}
+				err := survey.AskOne(prompt, &baseURL)
+				if err != nil {
+					ui.Error(fmt.Sprintf("Failed to get base URL: %v", err))
+					os.Exit(1)
+				}
+				cfg.Ollama.BaseURL = baseURL
+				
+				// Try to fetch models
+				models, err := fetchOllamaModels(baseURL)
+				if err != nil {
+					ui.Warn("Ollama not running. Enter model name manually.")
+					modelName := ""
+					prompt := &survey.Input{
+						Message: "Model name",
+						Default: "qwen3-coder:480b-cloud",
+					}
+					err := survey.AskOne(prompt, &modelName)
+					if err != nil {
+						ui.Error(fmt.Sprintf("Failed to get model name: %v", err))
+						os.Exit(1)
+					}
+					// For Ollama, we don't store the model in config, but we could if needed
+				} else {
+					// Select model from fetched models
+					modelSelection := ""
+					prompt := &survey.Select{
+						Message: "Select default model",
+						Options: models,
+					}
+					err := survey.AskOne(prompt, &modelSelection)
+					if err != nil {
+						ui.Error(fmt.Sprintf("Failed to get model selection: %v", err))
+						os.Exit(1)
+					}
+					// For Ollama, we don't store the model in config, but we could if needed
+				}
+				
+			case "OpenAI":
+				cfg.Provider = "openai"
+				
+				// Get API key
+				apiKey := ""
+				prompt := &survey.Password{
+					Message: "Enter OpenAI API key (sk-...)",
+				}
+				err := survey.AskOne(prompt, &apiKey)
+				if err != nil {
+					ui.Error(fmt.Sprintf("Failed to get API key: %v", err))
+					os.Exit(1)
+				}
+				cfg.OpenAI.APIKey = apiKey
+				
+				// Get model
+				model := ""
+				prompt2 := &survey.Input{
+					Message: "Model",
+					Default: "gpt-4o",
+				}
+				err = survey.AskOne(prompt2, &model)
+				if err != nil {
+					ui.Error(fmt.Sprintf("Failed to get model: %v", err))
+					os.Exit(1)
+				}
+				cfg.OpenAI.Model = model
+				
+			case "Anthropic (Claude)":
+				cfg.Provider = "anthropic"
+				
+				// Get API key
+				apiKey := ""
+				prompt := &survey.Password{
+					Message: "Enter Anthropic API key (sk-ant-...)",
+				}
+				err := survey.AskOne(prompt, &apiKey)
+				if err != nil {
+					ui.Error(fmt.Sprintf("Failed to get API key: %v", err))
+					os.Exit(1)
+				}
+				cfg.Anthropic.APIKey = apiKey
+				
+				// Get model
+				model := ""
+				prompt2 := &survey.Input{
+					Message: "Model",
+					Default: "claude-sonnet-4-20250514",
+				}
+				err = survey.AskOne(prompt2, &model)
+				if err != nil {
+					ui.Error(fmt.Sprintf("Failed to get model: %v", err))
+					os.Exit(1)
+				}
+				cfg.Anthropic.Model = model
+				
+			case "Groq":
+				cfg.Provider = "groq"
+				
+				// Get API key
+				apiKey := ""
+				prompt := &survey.Password{
+					Message: "Enter Groq API key",
+				}
+				err := survey.AskOne(prompt, &apiKey)
+				if err != nil {
+					ui.Error(fmt.Sprintf("Failed to get API key: %v", err))
+					os.Exit(1)
+				}
+				cfg.Groq.APIKey = apiKey
+				
+				// Get model
+				model := ""
+				prompt2 := &survey.Input{
+					Message: "Model",
+					Default: "llama3-70b-8192",
+				}
+				err = survey.AskOne(prompt2, &model)
+				if err != nil {
+					ui.Error(fmt.Sprintf("Failed to get model: %v", err))
+					os.Exit(1)
+				}
+				cfg.Groq.Model = model
+			}
+			
+			// Save config
+			err := config.SaveConfig(cfg)
+			if err != nil {
+				ui.Error(fmt.Sprintf("Failed to save config: %v", err))
+				os.Exit(1)
+			}
+			
+			ui.Success("Provider configured successfully")
+		},
+	}
 )
+
+// fetchOllamaModels attempts to fetch models from Ollama API
+func fetchOllamaModels(baseURL string) ([]string, error) {
+	// Make HTTP request to Ollama API
+	resp, err := http.Get(baseURL + "/api/tags")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	// Check if response is successful
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+	
+	// Read response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Parse JSON response
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, err
+	}
+	
+	// Extract models from response
+	models, ok := result["models"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("unexpected response format")
+	}
+	
+	// Convert to string slice
+	var modelNames []string
+	for _, model := range models {
+		if modelMap, ok := model.(map[string]interface{}); ok {
+			if name, ok := modelMap["name"].(string); ok {
+				modelNames = append(modelNames, name)
+			}
+		}
+	}
+	
+	return modelNames, nil
+}
 
 // resolveVersionConstraint resolves a version constraint to an actual version
 func resolveVersionConstraint(name, constraint string, registryClient *registry.RegistryClient) (string, error) {
@@ -660,12 +918,12 @@ func resolveVersionConstraint(name, constraint string, registryClient *registry.
 		}
 		return pkgInfo.Version, nil
 	}
-	
+
 	// If constraint is an exact version (doesn't start with ^ or ~), use it directly
 	if !strings.HasPrefix(constraint, "^") && !strings.HasPrefix(constraint, "~") {
 		return constraint, nil
 	}
-	
+
 	// For version constraints, we need to get available versions and resolve
 	// Since we don't have a direct API for getting all versions, we'll fetch the latest
 	// and then validate it against the constraint using our resolution logic
@@ -674,16 +932,16 @@ func resolveVersionConstraint(name, constraint string, registryClient *registry.
 	if err != nil {
 		return "", fmt.Errorf("failed to get package info for %s: %v", name, err)
 	}
-	
+
 	// In a full implementation, we would get all available versions and use the resolver
 	// For now, we'll just use the latest version and assume it satisfies the constraint
 	// A production implementation would use pkg/registry/resolve.go functions
 	// For this implementation, we'll use a simplified approach that works for common cases
-	
+
 	// In a full implementation, we would get all available versions and use the resolver
 	// For now, we'll just use the latest version and assume it satisfies the constraint
 	// A production implementation would use pkg/registry/resolve.go functions
-	
+
 	return pkgInfo.Version, nil
 }
 
@@ -714,6 +972,7 @@ func init() {
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(secretsCmd)
 	rootCmd.AddCommand(configCmd)
+	rootCmd.AddCommand(initCmd)
 	
 	// Add subcommands to secretsCmd
 	secretsCmd.AddCommand(secretsSetCmd)
