@@ -2,24 +2,22 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
+	"github.com/ranscky/neuron-registry/pkg/auth"
 	"github.com/ranscky/neuron-registry/pkg/store"
 )
 
 // SearchHandler handles GET /v1/search
 type SearchHandler struct {
-	store store.Store
+	store   store.Store
+	authMgr *auth.Manager
 }
 
 // NewSearchHandler creates a new SearchHandler
-func NewSearchHandler(s store.Store) *SearchHandler {
-	return &SearchHandler{store: s}
-}
-
-// SearchResponse represents the response structure for search
-type SearchResponse struct {
-	Results []store.PackageInfo `json:"results"`
+func NewSearchHandler(s store.Store, m *auth.Manager) *SearchHandler {
+	return &SearchHandler{store: s, authMgr: m}
 }
 
 // ServeHTTP handles the GET /v1/search request
@@ -29,21 +27,39 @@ func (h *SearchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read q query param
-	query := r.URL.Query().Get("q")
+	// AUTHENTICATION
+	rawKey := r.Header.Get("Authorization")
+	if rawKey == "" {
+		http.Error(w, `{"error": "missing authorization header"}`, http.StatusUnauthorized)
+		return
+	}
+	if len(rawKey) > 7 && rawKey[:7] == "Bearer " {
+		rawKey = rawKey[7:]
+	}
 
-	// Call store.Search(q) - empty query will return all packages
-	results, err := h.store.Search(query)
+	key, orgID, err := h.authMgr.Authenticate(rawKey)
 	if err != nil {
-		http.Error(w, `{"error": "search failed"}`, http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf(`{"error": "auth error: %s"}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+	if key == nil {
+		http.Error(w, `{"error": "invalid or revoked API key"}`, http.StatusUnauthorized)
 		return
 	}
 
-	// Return JSON with "results" array of PackageInfo
-	response := SearchResponse{
-		Results: results,
+	query := r.URL.Query().Get("q")
+	if query == "" {
+		http.Error(w, `{"error": "query parameter 'q' is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Search scoped to the authenticated org
+	results, err := h.store.Search(orgID, query)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "internal search error: %s"}`, err.Error()), http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(results)
 }

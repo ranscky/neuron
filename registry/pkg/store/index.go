@@ -4,124 +4,101 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
 
-// Index implements an in-memory search index
+// Index implements a per-org in-memory search index.
+//
+// Storage format changed: previously serialized as a JSON array of PackageInfo.
+// Now serialized as a JSON object keyed by "name@version" for O(1) lookup.
+// The old format is auto-migrated on load.
 type Index struct {
 	packages map[string]PackageInfo
 }
 
-// NewIndex creates a new Index instance and loads data from disk
-func NewIndex() (*Index, error) {
-	index := &Index{
+// NewIndex creates an empty Index.
+func NewIndex() *Index {
+	return &Index{
 		packages: make(map[string]PackageInfo),
 	}
-	
-	// Try to load existing index
-	if err := index.Load(); err != nil {
-		// If loading fails, it's not fatal - we can start with an empty index
-		fmt.Printf("Warning: failed to load index: %v\n", err)
-	}
-	
-	return index, nil
 }
 
-// Load reads the index from data/index.json
-func (idx *Index) Load() error {
-	path := filepath.Join("data", "index.json")
+// LoadOrMigrate reads the index from disk, handling both legacy array format
+// and current map format.
+func (idx *Index) LoadOrMigrate(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Index file doesn't exist yet, which is fine
 			return nil
 		}
-		return fmt.Errorf("failed to read index from %s: %w", path, err)
+		return fmt.Errorf("read index: %w", err)
 	}
-	
-	var packages []PackageInfo
-	if err := json.Unmarshal(data, &packages); err != nil {
-		return fmt.Errorf("failed to parse index: %w", err)
+
+	// Try map format first (current).
+	var asMap map[string]PackageInfo
+	if err := json.Unmarshal(data, &asMap); err == nil {
+		// Validate it actually looks like a map (has at least one @-key if non-empty).
+		if len(asMap) == 0 || hasAtKey(asMap) {
+			idx.packages = asMap
+			return nil
+		}
 	}
-	
-	// Convert slice to map for faster lookups
-	for _, pkg := range packages {
-		key := fmt.Sprintf("%s@%s", pkg.Name, pkg.Version)
-		idx.packages[key] = pkg
+
+	// Fall back to legacy array format.
+	var asArray []PackageInfo
+	if err := json.Unmarshal(data, &asArray); err == nil {
+		for _, pkg := range asArray {
+			key := fmt.Sprintf("%s@%s", pkg.Name, pkg.Version)
+			idx.packages[key] = pkg
+		}
+		return nil
 	}
-	
-	return nil
+
+	return fmt.Errorf("index file at %s is neither map nor array format", path)
 }
 
-// Save writes the index to data/index.json
-func (idx *Index) Save() error {
-	// Convert map to slice for JSON serialization
-	packages := make([]PackageInfo, 0, len(idx.packages))
-	for _, pkg := range idx.packages {
-		packages = append(packages, pkg)
-	}
-	
-	// Marshal to JSON
-	data, err := json.MarshalIndent(packages, "", "  ")
+// Save returns the serialized index bytes. The caller writes them to disk.
+// Returning bytes (instead of writing directly) keeps the Index package free
+// of filesystem concerns — tests can assert on the JSON shape without temp files.
+func (idx *Index) Save() ([]byte, error) {
+	data, err := json.MarshalIndent(idx.packages, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal index: %w", err)
+		return nil, fmt.Errorf("marshal index: %w", err)
 	}
-	
-	// Ensure directory exists
-	dir := filepath.Dir(filepath.Join("data", "index.json"))
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create directory %s: %w", dir, err)
-	}
-	
-	// Write to file
-	path := filepath.Join("data", "index.json")
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("failed to write index to %s: %w", path, err)
-	}
-	
-	return nil
+	return data, nil
 }
 
-// AddPackage adds a package to the index
+// AddPackage adds a package to the index.
 func (idx *Index) AddPackage(pkg PackageInfo) error {
 	key := fmt.Sprintf("%s@%s", pkg.Name, pkg.Version)
 	idx.packages[key] = pkg
 	return nil
 }
 
-// Search performs a case-insensitive string contains check on name and description
-// Returns only the latest version of each package
+// Search performs a case-insensitive substring match on name and description.
+// Returns only the latest version of each matched package.
 func (idx *Index) Search(query string) []PackageInfo {
 	query = strings.ToLower(query)
-	
-	// Group packages by name
+
 	packagesByName := make(map[string][]PackageInfo)
-	
 	for _, pkg := range idx.packages {
 		name := strings.ToLower(pkg.Name)
 		description := strings.ToLower(pkg.Description)
-		
 		if query == "" || strings.Contains(name, query) || strings.Contains(description, query) {
 			packagesByName[pkg.Name] = append(packagesByName[pkg.Name], pkg)
 		}
 	}
-	
-	// For each package name, find the latest version
+
 	results := []PackageInfo{}
 	for _, packages := range packagesByName {
 		if len(packages) == 0 {
 			continue
 		}
-		
-		// If only one version exists, use it
 		if len(packages) == 1 {
 			results = append(results, packages[0])
 			continue
 		}
-		
-		// Find the latest version using semver comparison
 		latest := packages[0]
 		for i := 1; i < len(packages); i++ {
 			if compareSemVer(packages[i].Version, latest.Version) > 0 {
@@ -130,19 +107,42 @@ func (idx *Index) Search(query string) []PackageInfo {
 		}
 		results = append(results, latest)
 	}
-	
 	return results
 }
 
-// compareSemVer compares two semantic versions
-// Returns: -1 if a < b, 0 if a == b, 1 if a > b
+// GetLatest returns the highest semver version for a package.
+func (idx *Index) GetLatest(name string) (string, error) {
+	versions := []string{}
+	for key, pkg := range idx.packages {
+		if pkg.Name == name {
+			parts := strings.Split(key, "@")
+			if len(parts) == 2 {
+				versions = append(versions, parts[1])
+			}
+		}
+	}
+	if len(versions) == 0 {
+		return "", fmt.Errorf("no versions found for package %s", name)
+	}
+	if len(versions) == 1 {
+		return versions[0], nil
+	}
+	highest := versions[0]
+	for i := 1; i < len(versions); i++ {
+		if compareSemVer(versions[i], highest) > 0 {
+			highest = versions[i]
+		}
+	}
+	return highest, nil
+}
+
+// compareSemVer compares two semver strings.
+// Returns -1 if a < b, 0 if equal, 1 if a > b.
 func compareSemVer(a, b string) int {
 	aParts := strings.Split(a, ".")
 	bParts := strings.Split(b, ".")
-	
-	// Compare each part (major, minor, patch)
+
 	for i := 0; i < 3; i++ {
-		// If one version has fewer parts, treat missing parts as 0
 		var aVal, bVal int
 		if i < len(aParts) {
 			aVal, _ = strconv.Atoi(aParts[i])
@@ -150,47 +150,23 @@ func compareSemVer(a, b string) int {
 		if i < len(bParts) {
 			bVal, _ = strconv.Atoi(bParts[i])
 		}
-		
 		if aVal < bVal {
 			return -1
 		} else if aVal > bVal {
 			return 1
 		}
 	}
-	
 	return 0
 }
 
-// GetLatest returns the highest semver version for a package
-func (idx *Index) GetLatest(name string) (string, error) {
-	versions := []string{}
-	
-	for key, pkg := range idx.packages {
-		if pkg.Name == name {
-			// Extract version from key (format: name@version)
-			parts := strings.Split(key, "@")
-			if len(parts) == 2 {
-				versions = append(versions, parts[1])
-			}
+// hasAtKey returns true if any key in the map contains "@".
+// Used to distinguish a real map-format index from a JSON-encoded array
+// that happened to parse as a map (shouldn't happen, but defensive).
+func hasAtKey(m map[string]PackageInfo) bool {
+	for k := range m {
+		if strings.Contains(k, "@") {
+			return true
 		}
 	}
-	
-	if len(versions) == 0 {
-		return "", fmt.Errorf("no versions found for package %s", name)
-	}
-	
-	// If only one version exists, return it
-	if len(versions) == 1 {
-		return versions[0], nil
-	}
-	
-	// Find the highest semver version
-	highest := versions[0]
-	for i := 1; i < len(versions); i++ {
-		if compareSemVer(versions[i], highest) > 0 {
-			highest = versions[i]
-		}
-	}
-	
-	return highest, nil
+	return len(m) == 0 // empty is fine
 }
