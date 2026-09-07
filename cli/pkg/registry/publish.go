@@ -175,9 +175,9 @@ func ValidateManifest() (*manifest.Manifest, error) {
 }
 
 // PublishPackage publishes a package to the registry
-func PublishPackage(registry Registry) error {
+func PublishPackage(client *RegistryClient) error {
 	// Validate the manifest first
-	manifest, err := ValidateManifest()
+	m, err := ValidateManifest()
 	if err != nil {
 		return err
 	}
@@ -188,8 +188,19 @@ func PublishPackage(registry Registry) error {
 		return fmt.Errorf("error creating tarball: %v", err)
 	}
 
+	// Temporary file for the tarball because RegistryClient.Publish expects a path
+	tmpFile, err := os.CreateTemp("", "neuron-*.tar.gz")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	if _, err := tmpFile.Write(tarball); err != nil {
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	tmpFile.Close()
+
 	// Publish to registry
-	if err := registry.Publish(manifest, tarball); err != nil {
+	if err := client.Publish(m.Name, m.Version, fmt.Sprintf(`{"name": "%s", "version": "%s"}`, m.Name, m.Version), tmpFile.Name()); err != nil {
 		return fmt.Errorf("error publishing to registry: %v", err)
 	}
 

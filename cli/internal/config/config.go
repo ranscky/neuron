@@ -32,11 +32,13 @@ type GroqConfig struct {
 
 // Config represents the Neuron CLI configuration
 type Config struct {
-	Provider  string         `json:"provider"`
-	Ollama    OllamaConfig   `json:"ollama"`
-	OpenAI    OpenAIConfig   `json:"openai"`
-	Anthropic AnthropicConfig `json:"anthropic"`
-	Groq      GroqConfig     `json:"groq"`
+	Provider      string         `json:"provider"`
+	Ollama        OllamaConfig   `json:"ollama"`
+	OpenAI        OpenAIConfig   `json:"openai"`
+	Anthropic     AnthropicConfig `json:"anthropic"`
+	Groq          GroqConfig     `json:"groq"`
+	RegistryToken string         `json:"registry_token"`
+	DefaultOrgID  string         `json:"default_org_id"`
 }
 
 // LoadConfig reads configuration from ~/.neuron/config.json

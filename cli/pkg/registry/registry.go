@@ -7,232 +7,162 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"net/url"
 	"os"
-
-	"github.com/ranscky/neuron/pkg/manifest"
+	"path/filepath"
+	"time"
 )
 
-// Package represents a package in the registry
-type Package struct {
-	Name        string `json:"name"`
-	Version     string `json:"version"`
-	Description string `json:"description"`
-}
-
-// PackageInfo represents detailed information about a package
-type PackageInfo struct {
-	Name        string `json:"name"`
-	Version     string `json:"version"`
-	Description string `json:"description"`
-	// Add other fields as needed
-}
-
-// Registry defines the interface for interacting with a package registry
-type Registry interface {
-	// Search finds packages matching a query
-	Search(query string) ([]Package, error)
-	
-	// Fetch retrieves a package by name and version
-	Fetch(name, version string) ([]byte, error)
-	
-	// GetPackageInfo retrieves detailed information about a package
-	GetPackageInfo(name string) (*PackageInfo, error)
-	
-	// Publish uploads a package to the registry
-	Publish(manifest *manifest.Manifest, tarball []byte) error
-}
-
-// RegistryClient implements the Registry interface
+// RegistryClient provides a client for interacting with the Neuron Registry.
 type RegistryClient struct {
-	baseURL string
+	BaseURL    string
+	Token      string
+	OrgID      string
+	HTTPClient *http.Client
 }
 
-// NewRegistryClient creates a new registry client
-func NewRegistryClient(baseURL string) *RegistryClient {
-	// If baseURL is not provided, use environment variable or default
-	if baseURL == "" {
-		baseURL = os.Getenv("NEURON_REGISTRY_URL")
-		if baseURL == "" {
-			baseURL = "https://neuron-production-ae02.up.railway.app"
-		}
-	}
+// NewRegistryClient creates a new RegistryClient.
+func NewRegistryClient(baseURL, token, orgID string) *RegistryClient {
 	return &RegistryClient{
-		baseURL: baseURL,
+		BaseURL:    baseURL,
+		Token:      token,
+		OrgID:      orgID,
+		HTTPClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
-// Search implements Registry.Search
-func (r *RegistryClient) Search(query string) ([]Package, error) {
-	// Construct the URL
-	u, err := url.Parse(r.baseURL)
-	if err != nil {
-		return nil, fmt.Errorf("error parsing base URL: %v", err)
+// Publish uploads a package to the registry.
+func (c *RegistryClient) Publish(name, version, manifestJSON string, tarballPath string) error {
+	if c.Token == "" {
+		return fmt.Errorf("registry token is missing; run 'neuron login <token>' first")
 	}
-	
-	u.Path = "/v1/search"
-	q := u.Query()
-	q.Set("q", query)
-	u.RawQuery = q.Encode()
-	
-	// Make the HTTP request
-	resp, err := http.Get(u.String())
-	if err != nil {
-		return nil, fmt.Errorf("error making search request: %v", err)
-	}
-	defer resp.Body.Close()
-	
-	// Check for non-200 response
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("search failed with status %d: %s", resp.StatusCode, string(body))
-	}
-	
-	// Parse the response
-	var result struct {
-		Results []Package `json:"results"`
-	}
-	
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("error reading response body: %v", err)
-	}
-	
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("error parsing response: %v", err)
-	}
-	
-	return result.Results, nil
-}
 
-// Fetch implements Registry.Fetch
-func (r *RegistryClient) Fetch(name, version string) ([]byte, error) {
-	// Construct the URL
-	u, err := url.Parse(r.baseURL)
+	tarballData, err := os.ReadFile(tarballPath)
 	if err != nil {
-		return nil, fmt.Errorf("error parsing base URL: %v", err)
+		return fmt.Errorf("read tarball: %w", err)
 	}
-	
-	u.Path = fmt.Sprintf("/v1/packages/%s/%s/download", name, version)
-	
-	// Make the HTTP request
-	resp, err := http.Get(u.String())
-	if err != nil {
-		return nil, fmt.Errorf("error making fetch request: %v", err)
-	}
-	defer resp.Body.Close()
-	
-	// Check for non-200 response
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("fetch failed with status %d: %s", resp.StatusCode, string(body))
-	}
-	
-	// Read the response body
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("error reading response body: %v", err)
-	}
-	
-	return data, nil
-}
 
-// Publish implements Registry.Publish
-func (r *RegistryClient) Publish(manifest *manifest.Manifest, tarball []byte) error {
-	// Construct the URL
-	u, err := url.Parse(r.baseURL)
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	if err := writer.WriteField("manifest", manifestJSON); err != nil {
+		return fmt.Errorf("write manifest field: %w", err)
+	}
+
+	part, err := writer.CreateFormFile("tarball", filepath.Base(tarballPath))
 	if err != nil {
-		return fmt.Errorf("error parsing base URL: %v", err)
+		return fmt.Errorf("create tarball part: %w", err)
 	}
-	
-	u.Path = "/v1/publish"
-	
-	// Create a buffer to write our multipart form
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
-	
-	// Add manifest field as JSON string
-	manifestBytes, err := json.Marshal(manifest)
+	if _, err := part.Write(tarballData); err != nil {
+		return fmt.Errorf("write tarball data: %w", err)
+	}
+	writer.Close()
+
+	req, err := http.NewRequest("POST", c.BaseURL+"/v1/publish", body)
 	if err != nil {
-		return fmt.Errorf("error marshaling manifest: %v", err)
+		return fmt.Errorf("create request: %w", err)
 	}
-	
-	if err := writer.WriteField("manifest", string(manifestBytes)); err != nil {
-		return fmt.Errorf("error writing manifest field: %v", err)
-	}
-	
-	// Add tarball field
-	part, err := writer.CreateFormFile("tarball", "package.tar.gz")
-	if err != nil {
-		return fmt.Errorf("error creating tarball field: %v", err)
-	}
-	
-	if _, err := part.Write(tarball); err != nil {
-		return fmt.Errorf("error writing tarball: %v", err)
-	}
-	
-	// Close the writer to finalize the multipart form
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("error closing multipart writer: %v", err)
-	}
-	
-	// Make the HTTP request
-	req, err := http.NewRequest("POST", u.String(), &buf)
-	if err != nil {
-		return fmt.Errorf("error creating request: %v", err)
-	}
-	
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+
+	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("error making publish request: %v", err)
+		return fmt.Errorf("do request: %w", err)
 	}
 	defer resp.Body.Close()
-	
-	// Check for non-200 response
+
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("publish failed with status %d: %s", resp.StatusCode, string(body))
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("server returned %d: %s", resp.StatusCode, string(bodyBytes))
 	}
-	
+
 	return nil
 }
 
-// GetPackageInfo fetches detailed information about a package
-func (r *RegistryClient) GetPackageInfo(name string) (*PackageInfo, error) {
-	// Construct the URL
-	u, err := url.Parse(r.baseURL)
+// Fetch downloads a package tarball.
+func (c *RegistryClient) Fetch(name, version string) ([]byte, error) {
+	url := fmt.Sprintf("%s/v1/packages/%s/%s/download", c.BaseURL, name, version)
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("error parsing base URL: %v", err)
+		return nil, err
 	}
-	
-	u.Path = fmt.Sprintf("/v1/packages/%s", name)
-	
-	// Make the HTTP request
-	resp, err := http.Get(u.String())
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+
+	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("error making request: %v", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
-	
-	// Check for non-200 response
+
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("server returned %d", resp.StatusCode)
 	}
-	
-	// Parse the response
-	var pkg PackageInfo
-	body, err := io.ReadAll(resp.Body)
+	return io.ReadAll(resp.Body)
+}
+
+// Search searches for packages in a specific org.
+func (c *RegistryClient) Search(orgID, query string) ([]PackageInfo, error) {
+	url := fmt.Sprintf("%s/v1/search?q=%s", c.BaseURL, query)
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("error reading response body: %v", err)
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server returned %d", resp.StatusCode)
+	}
+
+	var results []PackageInfo
+	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+		return nil, fmt.Errorf("decode search results: %w", err)
+	}
+	return results, nil
+}
+
+// GetLatest returns the latest version of a package in a specific org.
+func (c *RegistryClient) GetLatest(orgID, name string) (string, error) {
+	url := fmt.Sprintf("%s/v1/packages/%s", c.BaseURL, name)
+	req, httpReq := http.NewRequest("GET", url, nil)
+	_ = httpReq // ignore
+	if err := func() error {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+		return nil
+	}(); err != nil {
+		return "", err
 	}
 	
-	if err := json.Unmarshal(body, &pkg); err != nil {
-		return nil, fmt.Errorf("error parsing response: %v", err)
+	// This is a bit of a hack because I just want the version.
+	// The handler returns the full PackageInfo.
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return "", err
 	}
-	
-	return &pkg, nil
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("server returned %d", resp.StatusCode)
+	}
+
+	var info PackageInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return "", fmt.Errorf("decode package info: %w", err)
+	}
+	return info.Version, nil
+}
+
+// PackageInfo matches the registry's PackageInfo struct.
+type PackageInfo struct {
+	OrgID       string    `json:"org_id"`
+	Name        string    `json:"name"`
+	Version     string    `json:"version"`
+	Description string    `json:"description"`
+	Runtime     string    `json:"runtime"`
+	Permissions []string  `json:"permissions"`
+	PublishedAt string    `json:"published_at"`
 }
