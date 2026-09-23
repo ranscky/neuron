@@ -23,3 +23,8 @@ func (s *Store) Set(key, value string) error {
 func (s *Store) Get(key string) (string, error) {
 	return keyring.Get(serviceName, key)
 }
+
+// Delete removes a secret from the OS keyring
+func (s *Store) Delete(key string) error {
+	return keyring.Delete(serviceName, key)
+}

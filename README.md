@@ -1,23 +1,37 @@
 # Neuron
 
-**The package manager for AI tools, agents, and models.**
+**The MCP control plane for developers.**
 
 ```bash
-neuron install agents/researcher
-neuron run agents/researcher '{"query": "AI startups in Africa"}'
+neuron mcp add github --command npx --arg=-y \
+  --arg=@modelcontextprotocol/server-github --secret GITHUB_TOKEN=github-token
 ```
+
+One command registers an MCP server and syncs it to **every** AI client you
+use — Claude Code, Claude Desktop, Cursor, Cline, Windsurf, VS Code, and Zed —
+with credentials kept in your OS keychain instead of in plaintext JSON.
 
 ---
 
 ## What is Neuron?
 
-Neuron is to AI tools what npm is to JavaScript.
+MCP is becoming the USB-C of AI tools, but every client keeps its own config
+file, stores secrets in plaintext, and gives you almost no visibility into what
+your agent is actually doing.
 
-Developers today wire together agents, models, RAG pipelines and MCP servers
-manually — cloning repos, reading READMEs, managing dependencies by hand.
-Neuron standardizes how AI tools are packaged, distributed, and executed.
+Neuron is the missing control plane:
 
-One command to install. One command to run. Any tool, any model, any agent.
+- **One manifest, every client.** Register a server once; Neuron writes it to
+  every client it detects, preserving keys and formatting it does not own.
+- **Secrets never touch a config file.** Servers that need credentials are
+  launched through `neuron mcp run`, which resolves them from the OS keychain
+  at launch.
+- **Safe by default.** Atomic writes, a one-time `.neuron.bak` backup of every
+  config it edits, and `neuron mcp doctor` to catch missing secrets and dead
+  commands.
+
+Neuron also remains a package manager for distributed agents and tools; that
+layer is being rebuilt on top of this foundation.
 
 ---
 
@@ -51,6 +65,53 @@ neuron run agents/researcher '{"query": "latest AI trends"}'
 cd my-ai-tool
 neuron publish
 ```
+
+---
+
+## Manage MCP servers
+
+```bash
+# see what Neuron manages and which clients it found
+neuron mcp list
+
+# register a local (stdio) server
+neuron mcp add filesystem --command npx --arg=-y \
+  --arg=@modelcontextprotocol/server-filesystem
+
+# register a server that needs a credential: the value lives in your keychain,
+# never in a client config file
+neuron secrets set github-token ghp_xxx
+neuron mcp add github --command npx --arg=-y \
+  --arg=@modelcontextprotocol/server-github --secret GITHUB_TOKEN=github-token
+
+# register a remote server
+neuron mcp add linear --url https://mcp.linear.app/sse --type sse
+
+# push everything to every detected client again
+neuron mcp sync
+
+# check for missing secrets and unreachable commands
+neuron mcp doctor
+
+# remove a server from the store and from every client
+neuron mcp remove github
+```
+
+Servers that declare `--secret` are exposed to clients as
+`neuron mcp run <name>`; Neuron resolves the credential from the keychain when
+the client starts the server, so the value never lands on disk. Neuron writes
+configs atomically, keeps a one-time `.neuron.bak` backup, and preserves any
+keys it does not understand.
+
+| Client | Config file |
+|---|---|
+| Claude Code | `~/.claude.json` |
+| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) |
+| Cursor | `~/.cursor/mcp.json` |
+| Cline | VS Code globalStorage `.../saoudrizwan.claude-dev/settings/cline_mcp_settings.json` |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` |
+| VS Code | `<User>/mcp.json` (uses the `servers` key) |
+| Zed | `~/.config/zed/settings.json` (uses `context_servers`) |
 
 ---
 
@@ -176,19 +237,17 @@ neuron publish
 
 ## Roadmap
 
-- [x] CLI with install, publish, run, search, list
-- [x] Live registry with persistent storage
-- [x] Typed capability schema (neuron.json v1)
-- [x] Sandboxed Python runtime with venv isolation
-- [x] Secrets management with OS keychain
-- [x] 10 official packages
-- [ ] neuron secrets set command
-- [ ] Automatic dependency installation on neuron run
-- [ ] Composition engine — chain agents automatically
+The full plan lives in [BUILD_ROADMAP.md](BUILD_ROADMAP.md).
+
+- [x] Cross-client MCP management — `neuron mcp add/sync/list/doctor`
+- [x] Keychain-backed secrets that never touch client configs
+- [x] Atomic config writes with backups; unknown keys preserved
+- [x] CI (vet, build, test) for both modules
+- [ ] Local MCP proxy with tool-call history and a dashboard (Phase 2)
+- [ ] Cloud sync, team configs, and the $20/mo Pro tier (Phase 3)
+- [ ] Registry package distribution for agents, tools, and models
 - [ ] Node.js runtime
-- [ ] Private registries for enterprises
-- [ ] Usage metrics and outcome-based ranking
-- [ ] Pay-per-execution billing layer
+- [ ] Policy engine, audit log, SSO — the enterprise gateway (Phase 5)
 
 ---
 

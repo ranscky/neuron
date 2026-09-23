@@ -29,7 +29,7 @@ func (i *Injector) Inject(manifest *manifest.Manifest, env map[string]string) er
 			envVarName := strings.TrimPrefix(permission, "env:")
 			
 			// Get the secret value from the keyring
-			value, err := i.store.Get(permission)
+			value, err := i.store.Get(envVarName)
 			if err != nil {
 				// Keyring lookup failed, fall back to checking environment variable
 				envValue := os.Getenv(envVarName)

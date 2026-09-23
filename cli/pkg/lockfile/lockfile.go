@@ -1,4 +1,4 @@
-package installer
+package lockfile
 
 import (
 	"encoding/json"

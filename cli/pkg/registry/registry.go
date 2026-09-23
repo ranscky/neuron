@@ -33,9 +33,12 @@ type Registry interface {
 	// Search finds packages matching a query
 	Search(query string) ([]Package, error)
 	
+	// GetVersions retrieves all available versions for a package
+	GetVersions(name string) ([]string, error)
+
 	// Fetch retrieves a package by name and version
 	Fetch(name, version string) ([]byte, error)
-	
+
 	// GetPackageInfo retrieves detailed information about a package
 	GetPackageInfo(name string) (*PackageInfo, error)
 	
@@ -103,6 +106,40 @@ func (r *RegistryClient) Search(query string) ([]Package, error) {
 	}
 	
 	return result.Results, nil
+}
+
+// GetVersions implements Registry.GetVersions by querying the registry's
+// version listing endpoint, which returns a JSON array of version strings.
+func (r *RegistryClient) GetVersions(name string) ([]string, error) {
+	u, err := url.Parse(r.baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing base URL: %v", err)
+	}
+
+	u.Path = fmt.Sprintf("/v1/packages/%s/versions", name)
+
+	resp, err := http.Get(u.String())
+	if err != nil {
+		return nil, fmt.Errorf("error making versions request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("versions request failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading response body: %v", err)
+	}
+
+	var versions []string
+	if err := json.Unmarshal(body, &versions); err != nil {
+		return nil, fmt.Errorf("error parsing versions response: %v", err)
+	}
+
+	return versions, nil
 }
 
 // Fetch implements Registry.Fetch
