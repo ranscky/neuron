@@ -14,6 +14,7 @@ import (
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/fatih/color"
 	"github.com/ranscky/neuron/internal/config"
+	"github.com/ranscky/neuron/internal/proxy"
 	"github.com/ranscky/neuron/pkg/executor"
 	"github.com/ranscky/neuron/pkg/installer"
 	"github.com/ranscky/neuron/pkg/lockfile"
@@ -1178,11 +1179,14 @@ var (
 					if spec.URL != "" {
 						target = spec.URL
 					}
-					lock := ""
+					markers := ""
 					if spec.UsesSecrets() {
-						lock = " " + color.YellowString("[secrets]")
+						markers += " " + color.YellowString("[secrets]")
 					}
-					fmt.Printf("  %s → %s%s\n", color.CyanString(name), target, lock)
+					if spec.Proxy {
+						markers += " " + color.MagentaString("[proxied]")
+					}
+					fmt.Printf("  %s → %s%s\n", color.CyanString(name), target, markers)
 				}
 
 				fmt.Printf("\n%s\n", color.CyanString("Detected clients"))
@@ -1269,8 +1273,8 @@ var (
 			},
 		}
 
-		// Hidden launcher. Clients invoke this for servers that declare
-		// secrets, so that secret values never appear in a client config.
+		// Hidden launcher. Clients invoke this for every proxied server, so that
+		// secrets never appear in a client config and every call is recorded.
 		mcpRunCmd := &cobra.Command{
 			Use:    "run <name>",
 			Short:  "Launch a managed server with its secrets resolved",
@@ -1282,17 +1286,101 @@ var (
 					fmt.Fprintf(os.Stderr, "neuron: %v\n", err)
 					os.Exit(1)
 				}
+
+				// Recording is best-effort: a broken history file must never
+				// stop the server from running.
+				var rec proxy.Recorder
+				if hist, err := proxy.NewHistory(); err == nil {
+					rec = hist
+				}
+
 				secretStore := secrets.NewStore()
-				if err := mcp.RunServer(store, args[0], secretStore.Get, os.Stdin, os.Stdout, os.Stderr); err != nil {
+				if err := mcp.RunServer(store, args[0], secretStore.Get, rec, os.Stdin, os.Stdout, os.Stderr); err != nil {
 					fmt.Fprintf(os.Stderr, "neuron: %v\n", err)
 					os.Exit(1)
 				}
 			},
 		}
 
+		setProxy := func(name string, enabled bool) {
+			store, err := mcp.NewStore()
+			if err != nil {
+				ui.Error(fmt.Sprintf("Failed to open MCP store: %v", err))
+				os.Exit(1)
+			}
+			spec, err := store.Get(name)
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+			spec.Proxy = enabled
+			if err := store.Add(name, spec); err != nil {
+				ui.Error(fmt.Sprintf("Failed to save server: %v", err))
+				os.Exit(1)
+			}
+
+			clients, err := mcp.DetectClients()
+			if err != nil {
+				ui.Error(fmt.Sprintf("Failed to detect MCP clients: %v", err))
+				os.Exit(1)
+			}
+			if _, err := mcp.Sync(store, clients); err != nil {
+				ui.Error(fmt.Sprintf("Failed to sync clients: %v", err))
+				os.Exit(1)
+			}
+
+			if enabled {
+				ui.Success(fmt.Sprintf("%s now runs through the Neuron proxy — see `neuron ui`", name))
+			} else {
+				ui.Success(fmt.Sprintf("%s no longer runs through the proxy", name))
+			}
+		}
+
+		mcpWrapCmd := &cobra.Command{
+			Use:   "wrap <name>",
+			Short: "Route a server through the proxy so its calls are recorded",
+			Args:  cobra.ExactArgs(1),
+			Run: func(cmd *cobra.Command, args []string) {
+				setProxy(args[0], true)
+			},
+		}
+
+		mcpUnwrapCmd := &cobra.Command{
+			Use:   "unwrap <name>",
+			Short: "Stop routing a server through the proxy",
+			Args:  cobra.ExactArgs(1),
+			Run: func(cmd *cobra.Command, args []string) {
+				setProxy(args[0], false)
+			},
+		}
+
 		// Add mcp commands
-		mcpCmd.AddCommand(mcpAddCmd, mcpRemoveCmd, mcpListCmd, mcpSyncCmd, mcpDoctorCmd, mcpRunCmd)
+		mcpCmd.AddCommand(mcpAddCmd, mcpRemoveCmd, mcpListCmd, mcpSyncCmd, mcpDoctorCmd, mcpWrapCmd, mcpUnwrapCmd, mcpRunCmd)
 		rootCmd.AddCommand(mcpCmd)
+
+		// ui — the local MCP activity dashboard.
+		var uiPort int
+		uiCmd := &cobra.Command{
+			Use:   "ui",
+			Short: "Serve the local MCP activity dashboard",
+			Args:  cobra.NoArgs,
+			Run: func(cmd *cobra.Command, args []string) {
+				hist, err := proxy.NewHistory()
+				if err != nil {
+					ui.Error(fmt.Sprintf("Failed to open history: %v", err))
+					os.Exit(1)
+				}
+				addr := fmt.Sprintf("127.0.0.1:%d", uiPort)
+				ui.Success("Neuron dashboard: http://" + addr)
+				ui.Info("Wrapped servers are recorded here. Press Ctrl+C to stop.")
+				if err := http.ListenAndServe(addr, proxy.DashboardHandler(hist)); err != nil {
+					ui.Error(fmt.Sprintf("Dashboard stopped: %v", err))
+					os.Exit(1)
+				}
+			},
+		}
+		uiCmd.Flags().IntVar(&uiPort, "port", 7717, "port to serve the dashboard on")
+		rootCmd.AddCommand(uiCmd)
 
 		// runFlowCmd represents the run-flow command
 		runFlowCmd := &cobra.Command{

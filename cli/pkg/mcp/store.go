@@ -22,6 +22,9 @@ type ServerSpec struct {
 	// that declare secrets are exposed to clients through `neuron mcp run`,
 	// which resolves them at launch.
 	Secrets map[string]string `json:"secrets,omitempty"`
+	// Proxy routes this server through the Neuron proxy even when it needs no
+	// secrets, so its tool calls are recorded for observability.
+	Proxy bool `json:"proxy,omitempty"`
 }
 
 // UsesSecrets reports whether the server needs credentials at launch.

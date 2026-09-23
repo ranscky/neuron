@@ -95,13 +95,32 @@ neuron mcp doctor
 
 # remove a server from the store and from every client
 neuron mcp remove github
+
+# route a server through the proxy so its calls are recorded
+neuron mcp wrap github
 ```
 
-Servers that declare `--secret` are exposed to clients as
-`neuron mcp run <name>`; Neuron resolves the credential from the keychain when
-the client starts the server, so the value never lands on disk. Neuron writes
+Servers that declare `--secret`, or that you `wrap`, are exposed to clients as
+`neuron mcp run <name>`. Neuron resolves credentials from the keychain when the
+client starts the server, so values never land on disk, and every JSON-RPC
+message passes through the proxy where it can be recorded. Neuron writes
 configs atomically, keeps a one-time `.neuron.bak` backup, and preserves any
 keys it does not understand.
+
+---
+
+## See what your agent is doing
+
+```bash
+neuron ui          # dashboard at http://127.0.0.1:7717
+```
+
+Every call on a wrapped server is recorded — method, tool name, arguments,
+result, error, latency, and a rough token estimate — to
+`~/.neuron/history.jsonl`. The dashboard shows a live call stream plus
+per-server totals. Credential-shaped arguments (`token`, `secret`, `api_key`,
+`authorization`, …) are redacted before storage, and the proxy forwards bytes
+to the client unmodified.
 
 | Client | Config file |
 |---|---|
@@ -243,7 +262,7 @@ The full plan lives in [BUILD_ROADMAP.md](BUILD_ROADMAP.md).
 - [x] Keychain-backed secrets that never touch client configs
 - [x] Atomic config writes with backups; unknown keys preserved
 - [ ] CI (vet, build, test) for both modules — not pushed yet; the token lacks `workflow` scope
-- [ ] Local MCP proxy with tool-call history and a dashboard (Phase 2)
+- [x] Local MCP proxy with tool-call history and a dashboard (Phase 2)
 - [ ] Cloud sync, team configs, and the $20/mo Pro tier (Phase 3)
 - [ ] Registry package distribution for agents, tools, and models
 - [ ] Node.js runtime

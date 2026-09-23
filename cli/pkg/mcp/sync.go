@@ -14,14 +14,13 @@ func serversKey(f Format) string {
 
 // Materialize renders a spec into the object a client config should contain.
 //
-// Servers that declare secrets are exposed through the Neuron launcher
-// (`neuron mcp run <name>`) so that secret values never touch a client config
-// file; Neuron resolves them from the keychain at launch. Phase 2 will put the
-// observability proxy on this same seam.
+// Servers that declare secrets, or that are explicitly wrapped, are exposed
+// through the Neuron launcher (`neuron mcp run <name>`): secret values never
+// touch a client config, and every call is recorded by the proxy.
 func Materialize(name string, spec ServerSpec) map[string]interface{} {
 	entry := map[string]interface{}{}
 
-	if spec.UsesSecrets() {
+	if spec.UsesSecrets() || spec.Proxy {
 		entry["command"] = "neuron"
 		entry["args"] = []string{"mcp", "run", name}
 		if len(spec.Env) > 0 {

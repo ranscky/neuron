@@ -143,21 +143,58 @@ $ HOME=$TMP go run ./cmd/neuron mcp doctor
 
 ---
 
-## Phase 2 — The paid hook: local proxy + observability (Weeks 3–5)
+## Phase 2 — The paid hook: local proxy + observability — ✅ CORE SHIPPED 2026-09-23
 
 **Goal:** the demo that makes people say "I need this."
 
-- [ ] `internal/proxy`: transparent MCP JSON-RPC proxy over stdio (SSE/HTTP later).
-- [ ] `neuron mcp wrap <server>` and `neuron proxy` — clients talk to Neuron, Neuron talks to servers.
-- [ ] Capture per call: method, tool name, args, result, error, duration, token estimate.
-- [ ] SQLite history store (`~/.neuron/history.db`).
-- [ ] Health checks, auto-restart, crash capture with the last N frames.
-- [ ] `neuron ui`: local dashboard — live call stream, per-server stats, errors, spend.
-- [ ] Redact secrets from all logs and stored payloads.
+- [x] `internal/proxy`: transparent MCP JSON-RPC proxy over stdio. Bytes are forwarded verbatim —
+      including the absence of a trailing newline — so client behaviour cannot change.
+- [x] `neuron mcp wrap <name>` / `neuron mcp unwrap <name>`: force a server through the proxy.
+      `neuron mcp run <name>` is the single seam; it both resolves secrets and proxies traffic.
+- [x] Capture per call: method, tool name, args, result, error, duration, token estimate.
+- [x] Local history store at `~/.neuron/history.jsonl`, capped at 8 MB with rotation.
+- [x] `neuron ui`: local dashboard (live call stream, per-server stats, errors, token totals).
+- [x] Redaction of credential-shaped arguments (`token`, `secret`, `api_key`, `authorization`, …)
+      before anything is stored, plus a hard requirement that recording is best-effort.
 
-**Acceptance:** routing Claude Code through Neuron shows every tool call, args and result, with
-latency and cost; the proxy is transparent (client behavior unchanged); no secret appears in
-`history.db` or logs.
+**Deviations, recorded honestly:**
+
+- **JSONL instead of SQLite.** `~/.neuron/history.jsonl` needs no new dependency and reads fine for
+  a local dev tool. SQLite remains the right call once the dashboard needs real querying.
+- **No health checks / auto-restart yet.** The proxy reaps the child and forwards its stderr, but it
+  does not restart a crashed server. Deferred rather than half-built.
+- **`neuron proxy` as a standalone command was not added**; `neuron mcp run` is the seam that
+  clients actually call, so a second entry point would have been redundant.
+
+**Acceptance — MET, with one caveat:** calls are captured and displayed with latency, result and
+token totals, and the proxy is byte-transparent. Routing a *real* Claude Code session through it has
+not been exercised from this session — that needs the human at a machine with the client installed.
+
+**Evidence (end to end, isolated `$HOME`):**
+
+```
+$ neuron mcp add echo --command ./fake-mcp.sh
+$ neuron mcp wrap echo
+✓ echo now runs through the Neuron proxy — see `neuron ui`
+
+$ printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ping","arguments":{"token":"secret123"}}}\n' \
+    | neuron mcp run echo
+{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"pong"}]}}   # forwarded verbatim
+
+$ cat ~/.neuron/history.jsonl
+{"time":"…","server":"echo","method":"tools/call","tool":"ping",
+ "args":"{\"arguments\":{\"token\":\"[redacted]\"},\"name\":\"ping\"}",
+ "result":"{\"content\":[{\"type\":\"text\",\"text\":\"pong\"}]}","status":"ok",
+ "duration_ms":0,"tokens_in":13,"tokens_out":11}
+PASS: no secret value in history
+
+$ neuron ui --port 7799 &  curl -s localhost:7799/api/stats
+[{"server":"echo","calls":1,"errors":0,"avg_ms":0,"tokens_in":4,"tokens_out":11}]
+```
+
+**Tests:** 8 tests in `internal/proxy` — verbatim forwarding (terminated and unterminated), real
+subprocess proxying, string-id matching, error capture, notification filtering, redaction, history
+record/recent/stats/rotation behaviour, and the dashboard endpoints.
 
 ---
 

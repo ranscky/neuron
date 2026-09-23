@@ -309,7 +309,7 @@ func TestRunServerInjectsSecrets(t *testing.T) {
 			t.Errorf("unexpected secret key %q", key)
 		}
 		return "s3cr3t", nil
-	}, nil, &out, &out)
+	}, nil, nil, &out, &out)
 	if err != nil {
 		t.Fatal(err)
 	}
