@@ -15,6 +15,7 @@ import (
 	"github.com/ranscky/neuron/pkg/registry"
 	"github.com/ranscky/neuron/pkg/runtime"
 )
+
 // Installer handles downloading and installing packages
 type Installer struct {
 	lockfile *lockfile.Lockfile

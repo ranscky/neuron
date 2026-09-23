@@ -13,15 +13,15 @@ import (
 )
 
 type Executor struct {
-	installer *installer.Installer
-	lockfile  *lockfile.Lockfile
+	installer   *installer.Installer
+	lockfile    *lockfile.Lockfile
 	secretStore *secrets.Store
 }
 
 func NewExecutor(inst *installer.Installer, lf *lockfile.Lockfile, ss *secrets.Store) *Executor {
 	return &Executor{
-		installer: inst,
-		lockfile:  lf,
+		installer:   inst,
+		lockfile:    lf,
 		secretStore: ss,
 	}
 }

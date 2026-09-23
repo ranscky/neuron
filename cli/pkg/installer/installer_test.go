@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ranscky/neuron/pkg/registry"
 	"github.com/ranscky/neuron/pkg/manifest"
+	"github.com/ranscky/neuron/pkg/registry"
 )
 
 // MockRegistry is a mock implementation of the registry.Registry interface
@@ -44,15 +44,15 @@ func (m *MockRegistry) GetVersions(name string) ([]string, error) {
 func createTestTarball(name, version string) ([]byte, error) {
 	// Create a buffer to write our tarball to
 	buf := new(bytes.Buffer)
-	
+
 	// Create gzip writer
 	gzipWriter := gzip.NewWriter(buf)
 	defer gzipWriter.Close()
-	
+
 	// Create tar writer
 	tarWriter := tar.NewWriter(gzipWriter)
 	defer tarWriter.Close()
-	
+
 	// Create a simple neuron.json file
 	manifestContent := fmt.Sprintf(`{
   "name": "%s",
@@ -61,45 +61,45 @@ func createTestTarball(name, version string) ([]byte, error) {
   "entry": "main.py",
   "runtime": "python"
 }`, name, version)
-	
+
 	// Add neuron.json to the tar
 	hdr := &tar.Header{
 		Name: "neuron.json",
 		Mode: 0644,
 		Size: int64(len(manifestContent)),
 	}
-	
+
 	if err := tarWriter.WriteHeader(hdr); err != nil {
 		return nil, fmt.Errorf("failed to write tar header: %w", err)
 	}
-	
+
 	if _, err := tarWriter.Write([]byte(manifestContent)); err != nil {
 		return nil, fmt.Errorf("failed to write manifest to tar: %w", err)
 	}
-	
+
 	// Add a simple main.py file with actual content (not stub)
 	mainPyContent := `#!/usr/bin/env python3
 print("This is the real installed package content!")
 `
-	
+
 	hdr = &tar.Header{
 		Name: "main.py",
 		Mode: 0755,
 		Size: int64(len(mainPyContent)),
 	}
-	
+
 	if err := tarWriter.WriteHeader(hdr); err != nil {
 		return nil, fmt.Errorf("failed to write tar header for main.py: %w", err)
 	}
-	
+
 	if _, err := tarWriter.Write([]byte(mainPyContent)); err != nil {
 		return nil, fmt.Errorf("failed to write main.py to tar: %w", err)
 	}
-	
+
 	// Close writers to flush data
 	tarWriter.Close()
 	gzipWriter.Close()
-	
+
 	return buf.Bytes(), nil
 }
 
@@ -128,7 +128,7 @@ func TestInstaller(t *testing.T) {
 			return createTestTarball(name, version)
 		},
 	}
-	
+
 	// Set the mock registry on the installer
 	installer.registry = mockRegistry
 
@@ -147,24 +147,24 @@ func TestInstaller(t *testing.T) {
 	if version != "2.0.0" {
 		t.Errorf("Expected version 2.0.0 in lockfile, got %s", version)
 	}
-	
+
 	// Verify that the extracted files exist and have the correct content
 	homeDir := tempDir // Use tempDir as home dir for testing
 	packageDir := filepath.Join(homeDir, ".neuron", "packages", "example-package", "2.0.0")
-	
+
 	// Check that main.py exists
 	mainPyPath := filepath.Join(packageDir, "main.py")
 	mainPyContent, err := os.ReadFile(mainPyPath)
 	if err != nil {
 		t.Fatalf("Failed to read main.py: %v", err)
 	}
-	
+
 	// Check that the content is not the stub content
 	stubContent := "#!/usr/bin/env python3\nprint('Hello from the installed package!')"
 	if string(mainPyContent) == stubContent {
 		t.Error("main.py contains stub content, expected real content")
 	}
-	
+
 	// Check that the content is the expected real content
 	expectedContent := "#!/usr/bin/env python3\nprint(\"This is the real installed package content!\")\n"
 	if string(mainPyContent) != expectedContent {

@@ -25,7 +25,7 @@ func TestCreateTarball(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get current directory: %v", err)
 	}
-	
+
 	if err := os.Chdir(tempDir); err != nil {
 		t.Fatalf("Failed to change directory: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestCreateTarball(t *testing.T) {
 	defer gzReader.Close()
 
 	tarReader := tar.NewReader(gzReader)
-	
+
 	// Track found files
 	foundFiles := make(map[string]bool)
 	for _, expected := range expectedFiles {

@@ -20,14 +20,14 @@ func NewInjector(store *Store) *Injector {
 	}
 }
 
-// Inject takes a Manifest and a runtime environment map, looks up each permission 
+// Inject takes a Manifest and a runtime environment map, looks up each permission
 // that starts with "env:" in the keyring, and injects the value into the environment map
 func (i *Injector) Inject(manifest *manifest.Manifest, env map[string]string) error {
 	for _, permission := range manifest.Permissions {
 		if strings.HasPrefix(permission, "env:") {
 			// Extract the environment variable name (e.g., "env:OPENAI_KEY" -> "OPENAI_KEY")
 			envVarName := strings.TrimPrefix(permission, "env:")
-			
+
 			// Get the secret value from the keyring
 			value, err := i.store.Get(envVarName)
 			if err != nil {
@@ -40,11 +40,11 @@ func (i *Injector) Inject(manifest *manifest.Manifest, env map[string]string) er
 				// Use environment variable value
 				value = envValue
 			}
-			
+
 			// Inject the value into the environment map
 			env[envVarName] = value
 		}
 	}
-	
+
 	return nil
 }

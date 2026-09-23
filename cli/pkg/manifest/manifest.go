@@ -43,10 +43,10 @@ type Capability struct {
 
 // Performance represents performance metrics for a tool
 type Performance struct {
-	AvgLatencyMs     int     `json:"avg_latency_ms"`
-	P99LatencyMs     int     `json:"p99_latency_ms"`
-	SuccessRate      float64 `json:"success_rate"`
-	CostPerCallUsd   float64 `json:"cost_per_call_usd"`
+	AvgLatencyMs   int     `json:"avg_latency_ms"`
+	P99LatencyMs   int     `json:"p99_latency_ms"`
+	SuccessRate    float64 `json:"success_rate"`
+	CostPerCallUsd float64 `json:"cost_per_call_usd"`
 }
 
 // Manifest represents the neuron.json structure

@@ -878,442 +878,232 @@ var (
 	}
 )
 
-	// fetchOllamaModels attempts to fetch models from Ollama API
-	func fetchOllamaModels(baseURL string) ([]string, error) {
-		// Make HTTP request to Ollama API
-		resp, err := http.Get(baseURL + "/api/tags")
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
+// fetchOllamaModels attempts to fetch models from Ollama API
+func fetchOllamaModels(baseURL string) ([]string, error) {
+	// Make HTTP request to Ollama API
+	resp, err := http.Get(baseURL + "/api/tags")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
 
-		// Check if response is successful
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-		}
-
-		// Read response body
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, err
-		}
-
-		// Parse JSON response
-		var result map[string]interface{}
-		if err := json.Unmarshal(body, &result); err != nil {
-			return nil, err
-		}
-
-		// Extract models from response
-		models, ok := result["models"].([]interface{})
-		if !ok {
-			return nil, fmt.Errorf("unexpected response format")
-		}
-
-		// Convert to string slice
-		var modelNames []string
-		for _, model := range models {
-			if modelMap, ok := model.(map[string]interface{}); ok {
-				if name, ok := modelMap["name"].(string); ok {
-					modelNames = append(modelNames, name)
-				}
-			}
-		}
-
-		return modelNames, nil
+	// Check if response is successful
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	// resolveVersionConstraint resolves a version constraint to an actual version
-	func resolveVersionConstraint(name, constraint string, registryClient *registry.RegistryClient) (string, error) {
-		// If no constraint is provided, fetch the latest version from the registry
-		if constraint == "" {
-			fmt.Printf("Fetching latest version for package %s...\n", name)
-			pkgInfo, err := registryClient.GetPackageInfo(name)
-			if err != nil {
-				return "", fmt.Errorf("failed to get package info for %s: %v", name, err)
+	// Read response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse JSON response
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, err
+	}
+
+	// Extract models from response
+	models, ok := result["models"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("unexpected response format")
+	}
+
+	// Convert to string slice
+	var modelNames []string
+	for _, model := range models {
+		if modelMap, ok := model.(map[string]interface{}); ok {
+			if name, ok := modelMap["name"].(string); ok {
+				modelNames = append(modelNames, name)
 			}
-			return pkgInfo.Version, nil
 		}
+	}
 
-		// If constraint is an exact version (doesn't start with ^ or ~), use it directly
-		if !strings.HasPrefix(constraint, "^") && !strings.HasPrefix(constraint, "~") {
-			return constraint, nil
-		}
+	return modelNames, nil
+}
 
-		// For version constraints, we need to get available versions and resolve
-		// Since we don't have a direct API for getting all versions, we'll fetch the latest
-		// and then validate it against the constraint using our resolution logic
-		fmt.Printf("Resolving version constraint %s for package %s...\n", constraint, name)
+// resolveVersionConstraint resolves a version constraint to an actual version
+func resolveVersionConstraint(name, constraint string, registryClient *registry.RegistryClient) (string, error) {
+	// If no constraint is provided, fetch the latest version from the registry
+	if constraint == "" {
+		fmt.Printf("Fetching latest version for package %s...\n", name)
 		pkgInfo, err := registryClient.GetPackageInfo(name)
 		if err != nil {
 			return "", fmt.Errorf("failed to get package info for %s: %v", name, err)
 		}
-
-		// In a full implementation, we would get all available versions and use the resolver
-		// For now, we'll just use the latest version and assume it satisfies the constraint
-		// A production implementation would use pkg/registry/resolve.go functions
-		// For this implementation, we'll use a simplified approach that works for common cases
-
-		// In a full implementation, we would get all available versions and use the resolver
-		// For now, we'll just use the latest version and assume it satisfies the constraint
-		// A production implementation would use pkg/registry/resolve.go functions
-
 		return pkgInfo.Version, nil
 	}
 
-	func init() {
-		var err error
+	// If constraint is an exact version (doesn't start with ^ or ~), use it directly
+	if !strings.HasPrefix(constraint, "^") && !strings.HasPrefix(constraint, "~") {
+		return constraint, nil
+	}
 
-		// Initialize installer
-		installerClient, err = installer.NewInstaller()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to initialize installer: %v\n", err)
-			os.Exit(1)
-		}
+	// For version constraints, we need to get available versions and resolve
+	// Since we don't have a direct API for getting all versions, we'll fetch the latest
+	// and then validate it against the constraint using our resolution logic
+	fmt.Printf("Resolving version constraint %s for package %s...\n", constraint, name)
+	pkgInfo, err := registryClient.GetPackageInfo(name)
+	if err != nil {
+		return "", fmt.Errorf("failed to get package info for %s: %v", name, err)
+	}
 
-		// Initialize lockfile
-		lockFile, err = lockfile.NewLockfile()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to initialize lockfile: %v\n", err)
-			os.Exit(1)
-		}
+	// In a full implementation, we would get all available versions and use the resolver
+	// For now, we'll just use the latest version and assume it satisfies the constraint
+	// A production implementation would use pkg/registry/resolve.go functions
+	// For this implementation, we'll use a simplified approach that works for common cases
 
-		// Add all commands
-		rootCmd.AddCommand(installCmd)
-		rootCmd.AddCommand(publishCmd)
-		rootCmd.AddCommand(runCmd)
-		rootCmd.AddCommand(searchCmd)
-		rootCmd.AddCommand(listCmd)
-		rootCmd.AddCommand(uninstallCmd)
-		rootCmd.AddCommand(updateCmd)
-		rootCmd.AddCommand(secretsCmd)
-		rootCmd.AddCommand(configCmd)
-		rootCmd.AddCommand(initCmd)
+	// In a full implementation, we would get all available versions and use the resolver
+	// For now, we'll just use the latest version and assume it satisfies the constraint
+	// A production implementation would use pkg/registry/resolve.go functions
 
-		// Add subcommands to secretsCmd
-		secretsCmd.AddCommand(secretsSetCmd)
-		secretsCmd.AddCommand(secretsGetCmd)
+	return pkgInfo.Version, nil
+}
 
-		secretsRmCmd := &cobra.Command{
-			Use:   "rm <key>",
-			Short: "Delete a secret from the OS keychain",
-			Args:  cobra.ExactArgs(1),
-			Run: func(cmd *cobra.Command, args []string) {
-				store := secrets.NewStore()
-				if err := store.Delete(args[0]); err != nil {
-					ui.Error(fmt.Sprintf("Failed to delete secret: %v", err))
-					os.Exit(1)
-				}
-				ui.Success("Secret deleted")
-			},
-		}
+func init() {
+	var err error
 
-		secretsListCmd := &cobra.Command{
-			Use:   "list",
-			Short: "List secrets required by managed MCP servers",
-			Args:  cobra.NoArgs,
-			Run: func(cmd *cobra.Command, args []string) {
-				mcpStore, err := mcp.NewStore()
-				if err != nil {
-					ui.Error(fmt.Sprintf("Failed to open MCP store: %v", err))
-					os.Exit(1)
-				}
-				secretStore := secrets.NewStore()
-				found := false
-				for _, name := range mcpStore.Names() {
-					spec := mcpStore.Servers[name]
-					for envName, key := range spec.Secrets {
-						found = true
-						status := color.GreenString("set")
-						if _, err := secretStore.Get(key); err != nil {
-							status = color.RedString("missing")
-						}
-						fmt.Printf("%s (%s for %s) %s\n", color.CyanString(key), envName, name, status)
+	// Initialize installer
+	installerClient, err = installer.NewInstaller()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize installer: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Initialize lockfile
+	lockFile, err = lockfile.NewLockfile()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize lockfile: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Add all commands
+	rootCmd.AddCommand(installCmd)
+	rootCmd.AddCommand(publishCmd)
+	rootCmd.AddCommand(runCmd)
+	rootCmd.AddCommand(searchCmd)
+	rootCmd.AddCommand(listCmd)
+	rootCmd.AddCommand(uninstallCmd)
+	rootCmd.AddCommand(updateCmd)
+	rootCmd.AddCommand(secretsCmd)
+	rootCmd.AddCommand(configCmd)
+	rootCmd.AddCommand(initCmd)
+
+	// Add subcommands to secretsCmd
+	secretsCmd.AddCommand(secretsSetCmd)
+	secretsCmd.AddCommand(secretsGetCmd)
+
+	secretsRmCmd := &cobra.Command{
+		Use:   "rm <key>",
+		Short: "Delete a secret from the OS keychain",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			store := secrets.NewStore()
+			if err := store.Delete(args[0]); err != nil {
+				ui.Error(fmt.Sprintf("Failed to delete secret: %v", err))
+				os.Exit(1)
+			}
+			ui.Success("Secret deleted")
+		},
+	}
+
+	secretsListCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List secrets required by managed MCP servers",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			mcpStore, err := mcp.NewStore()
+			if err != nil {
+				ui.Error(fmt.Sprintf("Failed to open MCP store: %v", err))
+				os.Exit(1)
+			}
+			secretStore := secrets.NewStore()
+			found := false
+			for _, name := range mcpStore.Names() {
+				spec := mcpStore.Servers[name]
+				for envName, key := range spec.Secrets {
+					found = true
+					status := color.GreenString("set")
+					if _, err := secretStore.Get(key); err != nil {
+						status = color.RedString("missing")
 					}
+					fmt.Printf("%s (%s for %s) %s\n", color.CyanString(key), envName, name, status)
 				}
-				if !found {
-					fmt.Println("No secrets referenced by managed servers.")
-				}
-			},
-		}
-		secretsCmd.AddCommand(secretsRmCmd, secretsListCmd)
+			}
+			if !found {
+				fmt.Println("No secrets referenced by managed servers.")
+			}
+		},
+	}
+	secretsCmd.AddCommand(secretsRmCmd, secretsListCmd)
 
-		// Add subcommands to configCmd
-		configCmd.AddCommand(configSetCmd)
-		configCmd.AddCommand(configGetCmd)
-		configCmd.AddCommand(configShowCmd)
+	// Add subcommands to configCmd
+	configCmd.AddCommand(configSetCmd)
+	configCmd.AddCommand(configGetCmd)
+	configCmd.AddCommand(configShowCmd)
 
-		// mcp — manage MCP servers across every detected client.
-		mcpCmd := &cobra.Command{
-			Use:   "mcp",
-			Short: "Manage MCP servers across every AI client",
-			Long:  `Install, sync, inspect and debug MCP servers across every detected AI client.`,
-		}
+	// mcp — manage MCP servers across every detected client.
+	mcpCmd := &cobra.Command{
+		Use:   "mcp",
+		Short: "Manage MCP servers across every AI client",
+		Long:  `Install, sync, inspect and debug MCP servers across every detected AI client.`,
+	}
 
-		var (
-			addCommand string
-			addArgs    []string
-			addEnv     []string
-			addSecrets []string
-			addURL     string
-			addType    string
-		)
+	var (
+		addCommand string
+		addArgs    []string
+		addEnv     []string
+		addSecrets []string
+		addURL     string
+		addType    string
+	)
 
-		mcpAddCmd := &cobra.Command{
-			Use:   "add <name>",
-			Short: "Register a server and sync it to every client",
-			Args:  cobra.ExactArgs(1),
-			Run: func(cmd *cobra.Command, args []string) {
-				name := args[0]
+	mcpAddCmd := &cobra.Command{
+		Use:   "add <name>",
+		Short: "Register a server and sync it to every client",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			name := args[0]
 
-				spec := mcp.ServerSpec{
-					Command: addCommand,
-					Args:    addArgs,
-					URL:     addURL,
-					Type:    addType,
-				}
-				if len(addEnv) > 0 {
-					spec.Env = map[string]string{}
-				}
-				for _, pair := range addEnv {
-					k, v, ok := strings.Cut(pair, "=")
-					if !ok {
-						ui.Error(fmt.Sprintf("invalid --env %q, expected KEY=VALUE", pair))
-						os.Exit(1)
-					}
-					spec.Env[k] = v
-				}
-				if len(addSecrets) > 0 {
-					spec.Secrets = map[string]string{}
-				}
-				for _, pair := range addSecrets {
-					envName, secretKey, ok := strings.Cut(pair, "=")
-					if !ok {
-						ui.Error(fmt.Sprintf("invalid --secret %q, expected ENV_NAME=SECRET_KEY", pair))
-						os.Exit(1)
-					}
-					spec.Secrets[envName] = secretKey
-				}
-				if spec.Command == "" && spec.URL == "" {
-					ui.Error("provide --command or --url")
+			spec := mcp.ServerSpec{
+				Command: addCommand,
+				Args:    addArgs,
+				URL:     addURL,
+				Type:    addType,
+			}
+			if len(addEnv) > 0 {
+				spec.Env = map[string]string{}
+			}
+			for _, pair := range addEnv {
+				k, v, ok := strings.Cut(pair, "=")
+				if !ok {
+					ui.Error(fmt.Sprintf("invalid --env %q, expected KEY=VALUE", pair))
 					os.Exit(1)
 				}
+				spec.Env[k] = v
+			}
+			if len(addSecrets) > 0 {
+				spec.Secrets = map[string]string{}
+			}
+			for _, pair := range addSecrets {
+				envName, secretKey, ok := strings.Cut(pair, "=")
+				if !ok {
+					ui.Error(fmt.Sprintf("invalid --secret %q, expected ENV_NAME=SECRET_KEY", pair))
+					os.Exit(1)
+				}
+				spec.Secrets[envName] = secretKey
+			}
+			if spec.Command == "" && spec.URL == "" {
+				ui.Error("provide --command or --url")
+				os.Exit(1)
+			}
 
-				store, err := mcp.NewStore()
-				if err != nil {
-					ui.Error(fmt.Sprintf("Failed to open MCP store: %v", err))
-					os.Exit(1)
-				}
-				if err := store.Add(name, spec); err != nil {
-					ui.Error(fmt.Sprintf("Failed to save server: %v", err))
-					os.Exit(1)
-				}
-
-				clients, err := mcp.DetectClients()
-				if err != nil {
-					ui.Error(fmt.Sprintf("Failed to detect MCP clients: %v", err))
-					os.Exit(1)
-				}
-				res, err := mcp.Sync(store, clients)
-				if err != nil {
-					ui.Error(fmt.Sprintf("Failed to sync clients: %v", err))
-					os.Exit(1)
-				}
-				ui.Success(fmt.Sprintf("Added %s to %d client(s)", name, res.Clients))
-				if spec.UsesSecrets() {
-					ui.Step("Set required secrets with: neuron secrets set <KEY> <VALUE>")
-				}
-			},
-		}
-		mcpAddCmd.Flags().StringVar(&addCommand, "command", "", "command to launch the server")
-		mcpAddCmd.Flags().StringArrayVar(&addArgs, "arg", nil, "argument for the command (repeatable)")
-		mcpAddCmd.Flags().StringArrayVar(&addEnv, "env", nil, "non-secret environment variable, KEY=VALUE (repeatable)")
-		mcpAddCmd.Flags().StringArrayVar(&addSecrets, "secret", nil, "keychain-backed env var, ENV_NAME=SECRET_KEY (repeatable)")
-		mcpAddCmd.Flags().StringVar(&addURL, "url", "", "remote server URL")
-		mcpAddCmd.Flags().StringVar(&addType, "type", "", "remote transport type, e.g. http")
-
-		mcpRemoveCmd := &cobra.Command{
-			Use:   "remove <name>",
-			Short: "Remove a server from the store and every client",
-			Args:  cobra.ExactArgs(1),
-			Run: func(cmd *cobra.Command, args []string) {
-				name := args[0]
-
-				store, err := mcp.NewStore()
-				if err != nil {
-					ui.Error(fmt.Sprintf("Failed to open MCP store: %v", err))
-					os.Exit(1)
-				}
-				clients, err := mcp.DetectClients()
-				if err != nil {
-					ui.Error(fmt.Sprintf("Failed to detect MCP clients: %v", err))
-					os.Exit(1)
-				}
-				if err := mcp.Remove(store, clients, name); err != nil {
-					ui.Error(fmt.Sprintf("Failed to remove %s: %v", name, err))
-					os.Exit(1)
-				}
-				ui.Success(fmt.Sprintf("Removed %s from the store and %d client(s)", name, len(clients)))
-			},
-		}
-
-		mcpListCmd := &cobra.Command{
-			Use:   "list",
-			Short: "List managed servers and detected clients",
-			Args:  cobra.NoArgs,
-			Run: func(cmd *cobra.Command, args []string) {
-				store, err := mcp.NewStore()
-				if err != nil {
-					ui.Error(fmt.Sprintf("Failed to open MCP store: %v", err))
-					os.Exit(1)
-				}
-
-				fmt.Printf("%s\n", color.CyanString("Managed servers"))
-				names := store.Names()
-				if len(names) == 0 {
-					fmt.Println("  (none — add one with `neuron mcp add`)")
-				}
-				for _, name := range names {
-					spec := store.Servers[name]
-					target := spec.Command
-					if spec.URL != "" {
-						target = spec.URL
-					}
-					markers := ""
-					if spec.UsesSecrets() {
-						markers += " " + color.YellowString("[secrets]")
-					}
-					if spec.Proxy {
-						markers += " " + color.MagentaString("[proxied]")
-					}
-					fmt.Printf("  %s → %s%s\n", color.CyanString(name), target, markers)
-				}
-
-				fmt.Printf("\n%s\n", color.CyanString("Detected clients"))
-				clients, err := mcp.DetectClients()
-				if err != nil {
-					ui.Error(fmt.Sprintf("Failed to detect MCP clients: %v", err))
-					os.Exit(1)
-				}
-				if len(clients) == 0 {
-					fmt.Println("  (none detected)")
-				}
-				for _, client := range clients {
-					fmt.Printf("  %s  %s\n", color.CyanString(client.Name), client.ConfigPath)
-				}
-			},
-		}
-
-		mcpSyncCmd := &cobra.Command{
-			Use:   "sync",
-			Short: "Push every managed server to every detected client",
-			Args:  cobra.NoArgs,
-			Run: func(cmd *cobra.Command, args []string) {
-				store, err := mcp.NewStore()
-				if err != nil {
-					ui.Error(fmt.Sprintf("Failed to open MCP store: %v", err))
-					os.Exit(1)
-				}
-				clients, err := mcp.DetectClients()
-				if err != nil {
-					ui.Error(fmt.Sprintf("Failed to detect MCP clients: %v", err))
-					os.Exit(1)
-				}
-				res, err := mcp.Sync(store, clients)
-				if err != nil {
-					ui.Error(fmt.Sprintf("Sync failed: %v", err))
-					os.Exit(1)
-				}
-				ui.Success(fmt.Sprintf("Synced %d server(s) to %d client(s)", res.Servers, res.Clients))
-			},
-		}
-
-		mcpDoctorCmd := &cobra.Command{
-			Use:   "doctor",
-			Short: "Check clients, servers and secrets for problems",
-			Args:  cobra.NoArgs,
-			Run: func(cmd *cobra.Command, args []string) {
-				store, err := mcp.NewStore()
-				if err != nil {
-					ui.Error(fmt.Sprintf("Failed to open MCP store: %v", err))
-					os.Exit(1)
-				}
-				clients, err := mcp.DetectClients()
-				if err != nil {
-					ui.Error(fmt.Sprintf("Failed to detect MCP clients: %v", err))
-					os.Exit(1)
-				}
-
-				secretStore := secrets.NewStore()
-				diags := mcp.Doctor(
-					store,
-					clients,
-					func(key string) bool {
-						_, err := secretStore.Get(key)
-						return err == nil
-					},
-					exec.LookPath,
-				)
-
-				problems := 0
-				for _, d := range diags {
-					switch d.Level {
-					case "error":
-						problems++
-						ui.Error(fmt.Sprintf("%s: %s", d.Subject, d.Message))
-					case "warn":
-						ui.Warn(fmt.Sprintf("%s: %s", d.Subject, d.Message))
-					default:
-						fmt.Printf("%s %s: %s\n", color.GreenString("ok"), d.Subject, d.Message)
-					}
-				}
-				if problems > 0 {
-					os.Exit(1)
-				}
-			},
-		}
-
-		// Hidden launcher. Clients invoke this for every proxied server, so that
-		// secrets never appear in a client config and every call is recorded.
-		mcpRunCmd := &cobra.Command{
-			Use:    "run <name>",
-			Short:  "Launch a managed server with its secrets resolved",
-			Args:   cobra.ExactArgs(1),
-			Hidden: true,
-			Run: func(cmd *cobra.Command, args []string) {
-				store, err := mcp.NewStore()
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "neuron: %v\n", err)
-					os.Exit(1)
-				}
-
-				// Recording is best-effort: a broken history file must never
-				// stop the server from running.
-				var rec proxy.Recorder
-				if hist, err := proxy.NewHistory(); err == nil {
-					rec = hist
-				}
-
-				secretStore := secrets.NewStore()
-				if err := mcp.RunServer(store, args[0], secretStore.Get, rec, os.Stdin, os.Stdout, os.Stderr); err != nil {
-					fmt.Fprintf(os.Stderr, "neuron: %v\n", err)
-					os.Exit(1)
-				}
-			},
-		}
-
-		setProxy := func(name string, enabled bool) {
 			store, err := mcp.NewStore()
 			if err != nil {
 				ui.Error(fmt.Sprintf("Failed to open MCP store: %v", err))
 				os.Exit(1)
 			}
-			spec, err := store.Get(name)
-			if err != nil {
-				ui.Error(err.Error())
-				os.Exit(1)
-			}
-			spec.Proxy = enabled
 			if err := store.Add(name, spec); err != nil {
 				ui.Error(fmt.Sprintf("Failed to save server: %v", err))
 				os.Exit(1)
@@ -1324,130 +1114,340 @@ var (
 				ui.Error(fmt.Sprintf("Failed to detect MCP clients: %v", err))
 				os.Exit(1)
 			}
-			if _, err := mcp.Sync(store, clients); err != nil {
+			res, err := mcp.Sync(store, clients)
+			if err != nil {
 				ui.Error(fmt.Sprintf("Failed to sync clients: %v", err))
 				os.Exit(1)
 			}
-
-			if enabled {
-				ui.Success(fmt.Sprintf("%s now runs through the Neuron proxy — see `neuron ui`", name))
-			} else {
-				ui.Success(fmt.Sprintf("%s no longer runs through the proxy", name))
+			ui.Success(fmt.Sprintf("Added %s to %d client(s)", name, res.Clients))
+			if spec.UsesSecrets() {
+				ui.Step("Set required secrets with: neuron secrets set <KEY> <VALUE>")
 			}
-		}
+		},
+	}
+	mcpAddCmd.Flags().StringVar(&addCommand, "command", "", "command to launch the server")
+	mcpAddCmd.Flags().StringArrayVar(&addArgs, "arg", nil, "argument for the command (repeatable)")
+	mcpAddCmd.Flags().StringArrayVar(&addEnv, "env", nil, "non-secret environment variable, KEY=VALUE (repeatable)")
+	mcpAddCmd.Flags().StringArrayVar(&addSecrets, "secret", nil, "keychain-backed env var, ENV_NAME=SECRET_KEY (repeatable)")
+	mcpAddCmd.Flags().StringVar(&addURL, "url", "", "remote server URL")
+	mcpAddCmd.Flags().StringVar(&addType, "type", "", "remote transport type, e.g. http")
 
-		mcpWrapCmd := &cobra.Command{
-			Use:   "wrap <name>",
-			Short: "Route a server through the proxy so its calls are recorded",
-			Args:  cobra.ExactArgs(1),
-			Run: func(cmd *cobra.Command, args []string) {
-				setProxy(args[0], true)
-			},
-		}
+	mcpRemoveCmd := &cobra.Command{
+		Use:   "remove <name>",
+		Short: "Remove a server from the store and every client",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			name := args[0]
 
-		mcpUnwrapCmd := &cobra.Command{
-			Use:   "unwrap <name>",
-			Short: "Stop routing a server through the proxy",
-			Args:  cobra.ExactArgs(1),
-			Run: func(cmd *cobra.Command, args []string) {
-				setProxy(args[0], false)
-			},
-		}
-
-		// Add mcp commands
-		mcpCmd.AddCommand(mcpAddCmd, mcpRemoveCmd, mcpListCmd, mcpSyncCmd, mcpDoctorCmd, mcpWrapCmd, mcpUnwrapCmd, mcpRunCmd)
-		rootCmd.AddCommand(mcpCmd)
-
-		// ui — the local MCP activity dashboard.
-		var uiPort int
-		uiCmd := &cobra.Command{
-			Use:   "ui",
-			Short: "Serve the local MCP activity dashboard",
-			Args:  cobra.NoArgs,
-			Run: func(cmd *cobra.Command, args []string) {
-				hist, err := proxy.NewHistory()
-				if err != nil {
-					ui.Error(fmt.Sprintf("Failed to open history: %v", err))
-					os.Exit(1)
-				}
-				addr := fmt.Sprintf("127.0.0.1:%d", uiPort)
-				ui.Success("Neuron dashboard: http://" + addr)
-				ui.Info("Wrapped servers are recorded here. Press Ctrl+C to stop.")
-				if err := http.ListenAndServe(addr, proxy.DashboardHandler(hist)); err != nil {
-					ui.Error(fmt.Sprintf("Dashboard stopped: %v", err))
-					os.Exit(1)
-				}
-			},
-		}
-		uiCmd.Flags().IntVar(&uiPort, "port", 7717, "port to serve the dashboard on")
-		rootCmd.AddCommand(uiCmd)
-
-		// runFlowCmd represents the run-flow command
-		runFlowCmd := &cobra.Command{
-			Use:   "run-flow <workflow_path> <query>",
-			Short: "Run a defined workflow",
-			Long:  `Parse workflow.json and execute steps in sequence, interpolating inputs and outputs`,
-			Args:  cobra.ExactArgs(2),
-			Run: func(cmd *cobra.Command, args []string) {
-				workflowPath := args[0]
-				userQuery := args[1]
-
-				// Parse workflow
-				wf, err := workflow.ParseWorkflow(workflowPath)
-				if err != nil {
-					ui.Error(fmt.Sprintf("Failed to parse workflow: %v", err))
-					os.Exit(1)
-				}
-
-				// Initialize executor and runner
-				secretStore := secrets.NewStore()
-				inst, err := installer.NewInstaller()
-				if err != nil {
-					ui.Error(fmt.Sprintf("Failed to initialize installer: %v", err))
-					os.Exit(1)
-				}
-				// We need the lockfile too
-				lf, err := lockfile.NewLockfile()
-				if err != nil {
-					ui.Error(fmt.Sprintf("Failed to initialize lockfile: %v", err))
-					os.Exit(1)
-				}
-
-				ex := executor.NewExecutor(inst, lf, secretStore)
-				runner := workflow.NewRunner(ex)
-
-				// Run the workflow
-				userInputs := map[string]string{
-					"user_query": userQuery,
-				}
-
-				if err := runner.Execute(wf, userInputs); err != nil {
-					ui.Error(fmt.Sprintf("Workflow execution failed: %v", err))
-					os.Exit(1)
-				}
-			},
-		}
-
-		// Add run-flow to root
-		rootCmd.AddCommand(runFlowCmd)
-
-		// version
-		versionCmd := &cobra.Command{
-			Use:   "version",
-			Short: "Print the Neuron version",
-			Args:  cobra.NoArgs,
-			Run: func(cmd *cobra.Command, args []string) {
-				fmt.Println(Version)
-			},
-		}
-		rootCmd.AddCommand(versionCmd)
-		rootCmd.Version = Version
+			store, err := mcp.NewStore()
+			if err != nil {
+				ui.Error(fmt.Sprintf("Failed to open MCP store: %v", err))
+				os.Exit(1)
+			}
+			clients, err := mcp.DetectClients()
+			if err != nil {
+				ui.Error(fmt.Sprintf("Failed to detect MCP clients: %v", err))
+				os.Exit(1)
+			}
+			if err := mcp.Remove(store, clients, name); err != nil {
+				ui.Error(fmt.Sprintf("Failed to remove %s: %v", name, err))
+				os.Exit(1)
+			}
+			ui.Success(fmt.Sprintf("Removed %s from the store and %d client(s)", name, len(clients)))
+		},
 	}
 
-	func main() {
-		// Execute the root command
-		if err := rootCmd.Execute(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	mcpListCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List managed servers and detected clients",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			store, err := mcp.NewStore()
+			if err != nil {
+				ui.Error(fmt.Sprintf("Failed to open MCP store: %v", err))
+				os.Exit(1)
+			}
+
+			fmt.Printf("%s\n", color.CyanString("Managed servers"))
+			names := store.Names()
+			if len(names) == 0 {
+				fmt.Println("  (none — add one with `neuron mcp add`)")
+			}
+			for _, name := range names {
+				spec := store.Servers[name]
+				target := spec.Command
+				if spec.URL != "" {
+					target = spec.URL
+				}
+				markers := ""
+				if spec.UsesSecrets() {
+					markers += " " + color.YellowString("[secrets]")
+				}
+				if spec.Proxy {
+					markers += " " + color.MagentaString("[proxied]")
+				}
+				fmt.Printf("  %s → %s%s\n", color.CyanString(name), target, markers)
+			}
+
+			fmt.Printf("\n%s\n", color.CyanString("Detected clients"))
+			clients, err := mcp.DetectClients()
+			if err != nil {
+				ui.Error(fmt.Sprintf("Failed to detect MCP clients: %v", err))
+				os.Exit(1)
+			}
+			if len(clients) == 0 {
+				fmt.Println("  (none detected)")
+			}
+			for _, client := range clients {
+				fmt.Printf("  %s  %s\n", color.CyanString(client.Name), client.ConfigPath)
+			}
+		},
+	}
+
+	mcpSyncCmd := &cobra.Command{
+		Use:   "sync",
+		Short: "Push every managed server to every detected client",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			store, err := mcp.NewStore()
+			if err != nil {
+				ui.Error(fmt.Sprintf("Failed to open MCP store: %v", err))
+				os.Exit(1)
+			}
+			clients, err := mcp.DetectClients()
+			if err != nil {
+				ui.Error(fmt.Sprintf("Failed to detect MCP clients: %v", err))
+				os.Exit(1)
+			}
+			res, err := mcp.Sync(store, clients)
+			if err != nil {
+				ui.Error(fmt.Sprintf("Sync failed: %v", err))
+				os.Exit(1)
+			}
+			ui.Success(fmt.Sprintf("Synced %d server(s) to %d client(s)", res.Servers, res.Clients))
+		},
+	}
+
+	mcpDoctorCmd := &cobra.Command{
+		Use:   "doctor",
+		Short: "Check clients, servers and secrets for problems",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			store, err := mcp.NewStore()
+			if err != nil {
+				ui.Error(fmt.Sprintf("Failed to open MCP store: %v", err))
+				os.Exit(1)
+			}
+			clients, err := mcp.DetectClients()
+			if err != nil {
+				ui.Error(fmt.Sprintf("Failed to detect MCP clients: %v", err))
+				os.Exit(1)
+			}
+
+			secretStore := secrets.NewStore()
+			diags := mcp.Doctor(
+				store,
+				clients,
+				func(key string) bool {
+					_, err := secretStore.Get(key)
+					return err == nil
+				},
+				exec.LookPath,
+			)
+
+			problems := 0
+			for _, d := range diags {
+				switch d.Level {
+				case "error":
+					problems++
+					ui.Error(fmt.Sprintf("%s: %s", d.Subject, d.Message))
+				case "warn":
+					ui.Warn(fmt.Sprintf("%s: %s", d.Subject, d.Message))
+				default:
+					fmt.Printf("%s %s: %s\n", color.GreenString("ok"), d.Subject, d.Message)
+				}
+			}
+			if problems > 0 {
+				os.Exit(1)
+			}
+		},
+	}
+
+	// Hidden launcher. Clients invoke this for every proxied server, so that
+	// secrets never appear in a client config and every call is recorded.
+	mcpRunCmd := &cobra.Command{
+		Use:    "run <name>",
+		Short:  "Launch a managed server with its secrets resolved",
+		Args:   cobra.ExactArgs(1),
+		Hidden: true,
+		Run: func(cmd *cobra.Command, args []string) {
+			store, err := mcp.NewStore()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "neuron: %v\n", err)
+				os.Exit(1)
+			}
+
+			// Recording is best-effort: a broken history file must never
+			// stop the server from running.
+			var rec proxy.Recorder
+			if hist, err := proxy.NewHistory(); err == nil {
+				rec = hist
+			}
+
+			secretStore := secrets.NewStore()
+			if err := mcp.RunServer(store, args[0], secretStore.Get, rec, os.Stdin, os.Stdout, os.Stderr); err != nil {
+				fmt.Fprintf(os.Stderr, "neuron: %v\n", err)
+				os.Exit(1)
+			}
+		},
+	}
+
+	setProxy := func(name string, enabled bool) {
+		store, err := mcp.NewStore()
+		if err != nil {
+			ui.Error(fmt.Sprintf("Failed to open MCP store: %v", err))
 			os.Exit(1)
 		}
+		spec, err := store.Get(name)
+		if err != nil {
+			ui.Error(err.Error())
+			os.Exit(1)
+		}
+		spec.Proxy = enabled
+		if err := store.Add(name, spec); err != nil {
+			ui.Error(fmt.Sprintf("Failed to save server: %v", err))
+			os.Exit(1)
+		}
+
+		clients, err := mcp.DetectClients()
+		if err != nil {
+			ui.Error(fmt.Sprintf("Failed to detect MCP clients: %v", err))
+			os.Exit(1)
+		}
+		if _, err := mcp.Sync(store, clients); err != nil {
+			ui.Error(fmt.Sprintf("Failed to sync clients: %v", err))
+			os.Exit(1)
+		}
+
+		if enabled {
+			ui.Success(fmt.Sprintf("%s now runs through the Neuron proxy — see `neuron ui`", name))
+		} else {
+			ui.Success(fmt.Sprintf("%s no longer runs through the proxy", name))
+		}
 	}
+
+	mcpWrapCmd := &cobra.Command{
+		Use:   "wrap <name>",
+		Short: "Route a server through the proxy so its calls are recorded",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			setProxy(args[0], true)
+		},
+	}
+
+	mcpUnwrapCmd := &cobra.Command{
+		Use:   "unwrap <name>",
+		Short: "Stop routing a server through the proxy",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			setProxy(args[0], false)
+		},
+	}
+
+	// Add mcp commands
+	mcpCmd.AddCommand(mcpAddCmd, mcpRemoveCmd, mcpListCmd, mcpSyncCmd, mcpDoctorCmd, mcpWrapCmd, mcpUnwrapCmd, mcpRunCmd)
+	rootCmd.AddCommand(mcpCmd)
+
+	// ui — the local MCP activity dashboard.
+	var uiPort int
+	uiCmd := &cobra.Command{
+		Use:   "ui",
+		Short: "Serve the local MCP activity dashboard",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			hist, err := proxy.NewHistory()
+			if err != nil {
+				ui.Error(fmt.Sprintf("Failed to open history: %v", err))
+				os.Exit(1)
+			}
+			addr := fmt.Sprintf("127.0.0.1:%d", uiPort)
+			ui.Success("Neuron dashboard: http://" + addr)
+			ui.Info("Wrapped servers are recorded here. Press Ctrl+C to stop.")
+			if err := http.ListenAndServe(addr, proxy.DashboardHandler(hist)); err != nil {
+				ui.Error(fmt.Sprintf("Dashboard stopped: %v", err))
+				os.Exit(1)
+			}
+		},
+	}
+	uiCmd.Flags().IntVar(&uiPort, "port", 7717, "port to serve the dashboard on")
+	rootCmd.AddCommand(uiCmd)
+
+	// runFlowCmd represents the run-flow command
+	runFlowCmd := &cobra.Command{
+		Use:   "run-flow <workflow_path> <query>",
+		Short: "Run a defined workflow",
+		Long:  `Parse workflow.json and execute steps in sequence, interpolating inputs and outputs`,
+		Args:  cobra.ExactArgs(2),
+		Run: func(cmd *cobra.Command, args []string) {
+			workflowPath := args[0]
+			userQuery := args[1]
+
+			// Parse workflow
+			wf, err := workflow.ParseWorkflow(workflowPath)
+			if err != nil {
+				ui.Error(fmt.Sprintf("Failed to parse workflow: %v", err))
+				os.Exit(1)
+			}
+
+			// Initialize executor and runner
+			secretStore := secrets.NewStore()
+			inst, err := installer.NewInstaller()
+			if err != nil {
+				ui.Error(fmt.Sprintf("Failed to initialize installer: %v", err))
+				os.Exit(1)
+			}
+			// We need the lockfile too
+			lf, err := lockfile.NewLockfile()
+			if err != nil {
+				ui.Error(fmt.Sprintf("Failed to initialize lockfile: %v", err))
+				os.Exit(1)
+			}
+
+			ex := executor.NewExecutor(inst, lf, secretStore)
+			runner := workflow.NewRunner(ex)
+
+			// Run the workflow
+			userInputs := map[string]string{
+				"user_query": userQuery,
+			}
+
+			if err := runner.Execute(wf, userInputs); err != nil {
+				ui.Error(fmt.Sprintf("Workflow execution failed: %v", err))
+				os.Exit(1)
+			}
+		},
+	}
+
+	// Add run-flow to root
+	rootCmd.AddCommand(runFlowCmd)
+
+	// version
+	versionCmd := &cobra.Command{
+		Use:   "version",
+		Short: "Print the Neuron version",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Println(Version)
+		},
+	}
+	rootCmd.AddCommand(versionCmd)
+	rootCmd.Version = Version
+}
+
+func main() {
+	// Execute the root command
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}

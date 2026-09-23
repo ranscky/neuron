@@ -13,19 +13,19 @@ func parseVersion(version string) (major, minor, patch int, err error) {
 	if len(parts) != 3 {
 		return 0, 0, 0, fmt.Errorf("invalid version format: %s", version)
 	}
-	
+
 	if major, err = strconv.Atoi(parts[0]); err != nil {
 		return 0, 0, 0, fmt.Errorf("invalid major version: %s", parts[0])
 	}
-	
+
 	if minor, err = strconv.Atoi(parts[1]); err != nil {
 		return 0, 0, 0, fmt.Errorf("invalid minor version: %s", parts[1])
 	}
-	
+
 	if patch, err = strconv.Atoi(parts[2]); err != nil {
 		return 0, 0, 0, fmt.Errorf("invalid patch version: %s", parts[2])
 	}
-	
+
 	return major, minor, patch, nil
 }
 
@@ -34,25 +34,25 @@ func versionMatches(version, constraint string) (bool, error) {
 	if constraint == "" || constraint == "*" {
 		return true, nil
 	}
-	
+
 	// Exact version match
 	if !strings.HasPrefix(constraint, "^") && !strings.HasPrefix(constraint, "~") {
 		return version == constraint, nil
 	}
-	
+
 	// Parse the version we're checking
 	vMajor, vMinor, vPatch, err := parseVersion(version)
 	if err != nil {
 		return false, err
 	}
-	
+
 	// Parse the constraint version
 	constraintVer := constraint[1:] // Remove ^ or ~ prefix
 	cMajor, cMinor, cPatch, err := parseVersion(constraintVer)
 	if err != nil {
 		return false, err
 	}
-	
+
 	// Caret (^) means compatible with the specified version
 	// Allows changes that do not modify the left-most non-zero digit
 	if strings.HasPrefix(constraint, "^") {
@@ -66,13 +66,13 @@ func versionMatches(version, constraint string) (bool, error) {
 		// For 1.x.y and above, allow changes to minor and patch versions
 		return vMinor >= cMinor, nil
 	}
-	
+
 	// Tilde (~) means approximately equivalent to the specified version
 	// Allows changes that do not modify the major or minor version
 	if strings.HasPrefix(constraint, "~") {
 		return vMajor == cMajor && vMinor == cMinor && vPatch >= cPatch, nil
 	}
-	
+
 	return false, nil
 }
 
@@ -83,33 +83,33 @@ func compareVersions(a, b string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	
+
 	bMajor, bMinor, bPatch, err := parseVersion(b)
 	if err != nil {
 		return 0, err
 	}
-	
+
 	if aMajor != bMajor {
 		if aMajor < bMajor {
 			return -1, nil
 		}
 		return 1, nil
 	}
-	
+
 	if aMinor != bMinor {
 		if aMinor < bMinor {
 			return -1, nil
 		}
 		return 1, nil
 	}
-	
+
 	if aPatch != bPatch {
 		if aPatch < bPatch {
 			return -1, nil
 		}
 		return 1, nil
 	}
-	
+
 	return 0, nil
 }
 
@@ -119,7 +119,7 @@ func ResolveVersion(name, constraint string, available []string) (string, error)
 	if len(available) == 0 {
 		return "", fmt.Errorf("no versions available for package %s", name)
 	}
-	
+
 	// Handle exact version constraint
 	if constraint == "" || constraint == "*" {
 		// Return the latest version
@@ -129,7 +129,7 @@ func ResolveVersion(name, constraint string, available []string) (string, error)
 		})
 		return available[0], nil
 	}
-	
+
 	// Check for exact match first
 	if !strings.HasPrefix(constraint, "^") && !strings.HasPrefix(constraint, "~") {
 		for _, version := range available {
@@ -139,7 +139,7 @@ func ResolveVersion(name, constraint string, available []string) (string, error)
 		}
 		return "", fmt.Errorf("exact version %s not found for package %s", constraint, name)
 	}
-	
+
 	// Find matching versions
 	var matches []string
 	for _, version := range available {
@@ -151,16 +151,16 @@ func ResolveVersion(name, constraint string, available []string) (string, error)
 			matches = append(matches, version)
 		}
 	}
-	
+
 	if len(matches) == 0 {
 		return "", fmt.Errorf("no matching version found for constraint %s for package %s", constraint, name)
 	}
-	
+
 	// Sort matches and return the highest version
 	sort.Slice(matches, func(i, j int) bool {
 		result, _ := compareVersions(matches[i], matches[j])
 		return result > 0
 	})
-	
+
 	return matches[0], nil
 }

@@ -7,9 +7,9 @@ import (
 )
 
 type Step struct {
-	ID       string                 `json:"id"`
-	Package  string                 `json:"package"`
-	Input    map[string]interface{} `json:"input"`
+	ID      string                 `json:"id"`
+	Package string                 `json:"package"`
+	Input   map[string]interface{} `json:"input"`
 }
 
 type Workflow struct {

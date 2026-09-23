@@ -19,20 +19,20 @@ func NewLockfile() (*Lockfile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get home directory: %w", err)
 	}
-	
+
 	lockfilePath := filepath.Join(homeDir, ".neuron", "lock.json")
-	
+
 	// Create the .neuron directory if it doesn't exist
 	neuronDir := filepath.Dir(lockfilePath)
 	if err := os.MkdirAll(neuronDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create neuron directory: %w", err)
 	}
-	
+
 	lf := &Lockfile{
 		path: lockfilePath,
 		data: make(map[string]string),
 	}
-	
+
 	// Try to load existing lockfile
 	if err := lf.load(); err != nil {
 		// If the file doesn't exist, that's fine, we'll create it later
@@ -40,7 +40,7 @@ func NewLockfile() (*Lockfile, error) {
 			return nil, fmt.Errorf("failed to load lockfile: %w", err)
 		}
 	}
-	
+
 	return lf, nil
 }
 
@@ -50,11 +50,11 @@ func (lf *Lockfile) load() error {
 	if err != nil {
 		return err
 	}
-	
+
 	if err := json.Unmarshal(data, &lf.data); err != nil {
 		return fmt.Errorf("failed to parse lockfile: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -64,11 +64,11 @@ func (lf *Lockfile) save() error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal lockfile data: %w", err)
 	}
-	
+
 	if err := os.WriteFile(lf.path, data, 0644); err != nil {
 		return fmt.Errorf("failed to write lockfile: %w", err)
 	}
-	
+
 	return nil
 }
 

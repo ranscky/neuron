@@ -303,18 +303,20 @@ func TestRunServerInjectsSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var out bytes.Buffer
+	// Separate buffers: a bytes.Buffer is not safe for concurrent writers, and
+	// stdout and stderr are serviced by different goroutines.
+	var out, errOut bytes.Buffer
 	err = RunServer(store, "env-echo", func(key string) (string, error) {
 		if key != "tok" {
 			t.Errorf("unexpected secret key %q", key)
 		}
 		return "s3cr3t", nil
-	}, nil, nil, &out, &out)
+	}, nil, nil, &out, &errOut)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if out.String() != "s3cr3t" {
-		t.Errorf("expected the secret in the child environment, got %q", out.String())
+		t.Errorf("expected the secret in the child environment, got stdout=%q stderr=%q", out.String(), errOut.String())
 	}
 }
 
