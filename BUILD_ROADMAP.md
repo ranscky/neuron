@@ -70,7 +70,8 @@ lockfile, executor, workflow runner.
       complete than the draft here.*
 - [x] `LICENSE` present. The merged hygiene PR chose **Apache-2.0**, while the README's License
       section still says MIT. Settling that is the human's call — I did not silently relicense.
-- [x] Add `.github/workflows/ci.yml`: `go vet` + `go test` + `go build` for `cli/` and `registry/`.
+- [ ] CI workflow written but **not pushed** — the GitHub token lacks `workflow` scope, and the human
+      chose to drop it for now. Tests are run locally (`go vet` + `go test`).
 - [x] Delete `cli/pkg/runtime/sandbox.go` (dead) and drop the "sandboxed runtime" claim from the README and CLI help.
 - [x] Stop injecting every provider key into every package — provider credentials are now gated on declared `env:` permissions.
 - [x] Add `neuron version` (and `--version`).

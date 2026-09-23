@@ -242,7 +242,7 @@ The full plan lives in [BUILD_ROADMAP.md](BUILD_ROADMAP.md).
 - [x] Cross-client MCP management — `neuron mcp add/sync/list/doctor`
 - [x] Keychain-backed secrets that never touch client configs
 - [x] Atomic config writes with backups; unknown keys preserved
-- [x] CI (vet, build, test) for both modules
+- [ ] CI (vet, build, test) for both modules — not pushed yet; the token lacks `workflow` scope
 - [ ] Local MCP proxy with tool-call history and a dashboard (Phase 2)
 - [ ] Cloud sync, team configs, and the $20/mo Pro tier (Phase 3)
 - [ ] Registry package distribution for agents, tools, and models
