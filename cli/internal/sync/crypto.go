@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 )
 
 const (
@@ -168,6 +169,12 @@ func (k *Key) aead() (cipher.AEAD, error) {
 // the client would decrypt it happily.
 func AAD(name, version string) []byte {
 	return []byte(name + "\x00" + version)
+}
+
+// TeamAAD binds a shared blob to its team as well as its server, so a blob
+// cannot be replayed across teams or servers.
+func TeamAAD(teamID, name string, version int64) []byte {
+	return []byte(teamID + "\x00" + name + "\x00" + strconv.FormatInt(version, 10))
 }
 
 // Bytes marshals an envelope for transport.

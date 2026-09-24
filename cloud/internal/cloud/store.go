@@ -80,6 +80,10 @@ type persisted struct {
 	// ProcessedEvents makes billing webhooks idempotent: Stripe retries, and a
 	// retry must not re-apply a plan change.
 	ProcessedEvents map[string]time.Time `json:"processed_events"`
+	// Teams and the encrypted blobs shared with them.
+	Teams       map[string]*Team            `json:"teams"`
+	TeamInvites map[string]string           `json:"team_invites"`
+	TeamBlobs   map[string]map[string]*Blob `json:"team_blobs"`
 }
 
 // Store is a mutex-guarded, file-backed store. It is deliberately boring: one
@@ -118,6 +122,9 @@ func emptyData() persisted {
 		Blobs:           map[string]map[string]*Blob{},
 		DeviceCodes:     map[string]*DeviceCode{},
 		ProcessedEvents: map[string]time.Time{},
+		Teams:           map[string]*Team{},
+		TeamInvites:     map[string]string{},
+		TeamBlobs:       map[string]map[string]*Blob{},
 	}
 }
 
@@ -136,6 +143,15 @@ func (s *Store) ensureMaps() {
 	}
 	if s.data.ProcessedEvents == nil {
 		s.data.ProcessedEvents = map[string]time.Time{}
+	}
+	if s.data.Teams == nil {
+		s.data.Teams = map[string]*Team{}
+	}
+	if s.data.TeamInvites == nil {
+		s.data.TeamInvites = map[string]string{}
+	}
+	if s.data.TeamBlobs == nil {
+		s.data.TeamBlobs = map[string]map[string]*Blob{}
 	}
 }
 

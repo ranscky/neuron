@@ -1662,6 +1662,228 @@ func init() {
 
 	rootCmd.AddCommand(loginCmd, logoutCmd, syncCmd)
 
+	// --- teams ------------------------------------------------------------
+
+	var teamPassphraseFlag string
+
+	teamCmd := &cobra.Command{
+		Use:   "team",
+		Short: "Share MCP servers with a team",
+		Long: "Teams share a curated, end-to-end encrypted set of MCP servers. The service never sees " +
+			"the team passphrase or the plaintext of any shared server.",
+	}
+
+	teamCreateCmd := &cobra.Command{
+		Use:   "create <name>",
+		Short: "Create a team and print its invite code",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			ctx := cmd.Context()
+			client, _, secretStore, err := requireSession()
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+
+			// Ask for the passphrase before creating anything, so a mistyped
+			// team never exists without a key the creator knows.
+			passphrase, err := resolveTeamPassphrase(teamPassphraseFlag)
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+
+			salt, err := sync.NewSalt()
+			if err != nil {
+				ui.Error(fmt.Sprintf("Could not generate a team salt: %v", err))
+				os.Exit(1)
+			}
+
+			team, err := client.CreateTeam(ctx, args[0], salt)
+			if err != nil {
+				ui.Error(fmt.Sprintf("Could not create the team: %v", err))
+				os.Exit(1)
+			}
+
+			teams, err := sync.LoadTeams()
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+			ref := sync.TeamRef{TeamID: team.ID, Name: team.Name, Salt: team.Salt}
+			if err := teams.Add(ref); err != nil {
+				ui.Error(fmt.Sprintf("Could not save the team locally: %v", err))
+				os.Exit(1)
+			}
+			if err := secretStore.Set(sync.TeamPassphraseKey(team.ID), passphrase); err != nil {
+				ui.Warn(fmt.Sprintf("Could not store the team passphrase in your keychain: %v", err))
+			}
+
+			ui.Success(fmt.Sprintf("Created team %s (%s)", team.Name, team.ID))
+			fmt.Printf("Invite code: %s\n", color.CyanString(team.InviteCode))
+			ui.Step("Share it with teammates, then run `neuron team sync " + team.Name + "`")
+		},
+	}
+	teamCreateCmd.Flags().StringVar(&teamPassphraseFlag, "passphrase", "", "team passphrase (or set NEURON_TEAM_PASSPHRASE)")
+
+	teamJoinCmd := &cobra.Command{
+		Use:   "join <invite-code>",
+		Short: "Join a team with an invite code",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			ctx := cmd.Context()
+			client, _, secretStore, err := requireSession()
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+
+			team, err := client.JoinTeam(ctx, strings.ToUpper(strings.TrimSpace(args[0])))
+			if err != nil {
+				ui.Error(fmt.Sprintf("Could not join the team: %v", err))
+				os.Exit(1)
+			}
+
+			passphrase, err := resolveTeamPassphrase(teamPassphraseFlag)
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+
+			teams, err := sync.LoadTeams()
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+			ref := sync.TeamRef{TeamID: team.ID, Name: team.Name, Salt: team.Salt}
+			if err := teams.Add(ref); err != nil {
+				ui.Error(fmt.Sprintf("Could not save the team locally: %v", err))
+				os.Exit(1)
+			}
+			if err := secretStore.Set(sync.TeamPassphraseKey(team.ID), passphrase); err != nil {
+				ui.Warn(fmt.Sprintf("Could not store the team passphrase in your keychain: %v", err))
+			}
+
+			ui.Success(fmt.Sprintf("Joined %s — run `neuron team sync %s`", team.Name, team.Name))
+		},
+	}
+	teamJoinCmd.Flags().StringVar(&teamPassphraseFlag, "passphrase", "", "team passphrase (or set NEURON_TEAM_PASSPHRASE)")
+
+	teamListCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List teams known to this machine",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			teams, err := sync.LoadTeams()
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+
+			refs := teams.List()
+			if len(refs) == 0 {
+				fmt.Println("No teams yet. Create one with `neuron team create <name>`.")
+				return
+			}
+
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+			fmt.Fprintln(w, "NAME\tTEAM ID")
+			for _, ref := range refs {
+				fmt.Fprintf(w, "%s\t%s\n", color.CyanString(ref.Name), ref.TeamID)
+			}
+			w.Flush()
+		},
+	}
+
+	teamSyncCmd := &cobra.Command{
+		Use:   "sync <team>",
+		Short: "Sync MCP servers with a team",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			ctx := cmd.Context()
+			client, _, secretStore, err := requireSession()
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+
+			teams, err := sync.LoadTeams()
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+			ref, err := teams.Get(args[0])
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+
+			passphrase, err := teamPassphrase(teamPassphraseFlag, ref.TeamID, secretStore)
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+			salt, err := ref.SaltBytes()
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+			teamKey, err := sync.DeriveKey(passphrase, salt, 0)
+			if err != nil {
+				ui.Error(fmt.Sprintf("Could not derive the team key: %v", err))
+				os.Exit(1)
+			}
+
+			store, err := mcp.NewStore()
+			if err != nil {
+				ui.Error(fmt.Sprintf("Failed to open MCP store: %v", err))
+				os.Exit(1)
+			}
+			engine, err := sync.NewEngine(store, secretStore, client, teamKey)
+			if err != nil {
+				ui.Error(fmt.Sprintf("Could not start team sync: %v", err))
+				os.Exit(1)
+			}
+
+			res, err := engine.SyncTeam(ctx, client, ref.TeamID, teamKey)
+			switch {
+			case errors.Is(err, sync.ErrPaymentRequired):
+				ui.Warn("Team sharing requires the paid plan.")
+				os.Exit(1)
+			case errors.Is(err, sync.ErrForbidden):
+				ui.Error("You are not a member of that team.")
+				os.Exit(1)
+			case errors.Is(err, sync.ErrUnauthorized):
+				ui.Error("Your session has expired. Run `neuron login` again.")
+				os.Exit(1)
+			case err != nil:
+				ui.Error(fmt.Sprintf("Team sync failed: %v", err))
+				os.Exit(1)
+			}
+
+			if len(res.Pushed) > 0 {
+				ui.Success("Pushed: " + strings.Join(res.Pushed, ", "))
+			}
+			if len(res.Pulled) > 0 {
+				ui.Success("Pulled: " + strings.Join(res.Pulled, ", "))
+			}
+			if len(res.Conflicts) > 0 {
+				for _, conflict := range res.Conflicts {
+					ui.Warn(fmt.Sprintf("Conflict on %s: %s", conflict.Name, conflict.Reason))
+				}
+				ui.Warn("Nothing was overwritten.")
+				os.Exit(2)
+			}
+			if len(res.Pushed) == 0 && len(res.Pulled) == 0 {
+				ui.Info("Already in sync with " + ref.Name + ".")
+			}
+		},
+	}
+	teamSyncCmd.Flags().StringVar(&teamPassphraseFlag, "passphrase", "", "team passphrase (or set NEURON_TEAM_PASSPHRASE)")
+
+	teamCmd.AddCommand(teamCreateCmd, teamJoinCmd, teamListCmd, teamSyncCmd)
+	rootCmd.AddCommand(teamCmd)
+
 	// runFlowCmd represents the run-flow command
 	runFlowCmd := &cobra.Command{
 		Use:   "run-flow <workflow_path> <query>",
@@ -1742,6 +1964,56 @@ func resolvePassphrase(flagValue string) (string, error) {
 		return "", errors.New("the passphrase must not be empty")
 	}
 	return value, nil
+}
+
+// requireSession returns a client authenticated with the stored session.
+func requireSession() (*sync.Client, *sync.Auth, *secrets.Store, error) {
+	auth, err := sync.LoadAuth()
+	if err != nil {
+		return nil, nil, nil, errors.New("not signed in — run `neuron login` first")
+	}
+
+	secretStore := secrets.NewStore()
+	token := os.Getenv("NEURON_SYNC_TOKEN")
+	if token == "" {
+		stored, err := secretStore.Get(sync.TokenKey)
+		if err != nil {
+			return nil, nil, nil, errors.New("no stored session — run `neuron login` again, or set NEURON_SYNC_TOKEN")
+		}
+		token = stored
+	}
+	return sync.NewClient(auth.BaseURL).WithToken(token), auth, secretStore, nil
+}
+
+// resolveTeamPassphrase reads the team passphrase from the flag, the
+// environment, or a prompt, in that order.
+func resolveTeamPassphrase(flagValue string) (string, error) {
+	if flagValue != "" {
+		return flagValue, nil
+	}
+	if fromEnv := os.Getenv("NEURON_TEAM_PASSPHRASE"); fromEnv != "" {
+		return fromEnv, nil
+	}
+
+	var value string
+	if err := survey.AskOne(&survey.Password{Message: "Team passphrase"}, &value); err != nil {
+		return "", fmt.Errorf("could not read the team passphrase: %w", err)
+	}
+	if value == "" {
+		return "", errors.New("the team passphrase must not be empty")
+	}
+	return value, nil
+}
+
+// teamPassphrase prefers the passphrase already stored for a team, so routine
+// syncs do not prompt.
+func teamPassphrase(flagValue, teamID string, secretStore *secrets.Store) (string, error) {
+	if flagValue == "" {
+		if stored, err := secretStore.Get(sync.TeamPassphraseKey(teamID)); err == nil && stored != "" {
+			return stored, nil
+		}
+	}
+	return resolveTeamPassphrase(flagValue)
 }
 
 func main() {

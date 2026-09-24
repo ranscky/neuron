@@ -18,6 +18,7 @@ import (
 var (
 	ErrPaymentRequired = errors.New("encrypted sync requires a paid plan")
 	ErrUnauthorized    = errors.New("not signed in, or the session has expired")
+	ErrForbidden       = errors.New("you are not a member of that team")
 	ErrPending         = errors.New("authorization pending")
 	ErrStaleVersion    = errors.New("the remote already holds a newer version")
 )
@@ -76,6 +77,8 @@ func (c *Client) do(ctx context.Context, method, path string, body, out interfac
 	case http.StatusOK, http.StatusCreated:
 	case http.StatusUnauthorized:
 		return ErrUnauthorized
+	case http.StatusForbidden:
+		return ErrForbidden
 	case http.StatusPaymentRequired:
 		return ErrPaymentRequired
 	case http.StatusNotFound:

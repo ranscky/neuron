@@ -64,6 +64,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/sync/blobs/{name}", s.auth(s.handlePutBlob))
 	mux.HandleFunc("POST /v1/billing/webhook", s.handleWebhook)
 
+	// Team-shared configuration.
+	mux.HandleFunc("POST /v1/teams", s.auth(s.handleCreateTeam))
+	mux.HandleFunc("GET /v1/teams", s.auth(s.handleListTeams))
+	mux.HandleFunc("POST /v1/teams/join", s.auth(s.handleJoinTeam))
+	mux.HandleFunc("GET /v1/teams/{id}", s.auth(s.handleGetTeam))
+	mux.HandleFunc("GET /v1/teams/{id}/blobs", s.auth(s.handleListTeamBlobs))
+	mux.HandleFunc("GET /v1/teams/{id}/blobs/{name}", s.auth(s.handleGetTeamBlob))
+	mux.HandleFunc("PUT /v1/teams/{id}/blobs/{name}", s.auth(s.handlePutTeamBlob))
+
 	return s.recoverPanics(mux)
 }
 

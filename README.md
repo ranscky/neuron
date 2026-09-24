@@ -161,6 +161,21 @@ Encrypted sync is the paid feature; local configuration management, secrets and
 the dashboard stay free. Self-hosters can lift the gate by starting the service
 with `NEURON_REQUIRE_PRO=false`.
 
+### Team-shared servers
+
+```bash
+neuron team create platform      # prints an invite code
+neuron team join 2CFT-TUCA       # on a teammate's machine
+neuron team sync platform        # push and pull the shared set
+neuron team list
+```
+
+A team has its own passphrase and therefore its own key. Shared servers are
+encrypted with the **team key**, and every blob is bound to the team as well as
+to the server name, so a blob cannot be replayed across teams. Any member can
+publish; a server changed by two people at once is reported as a conflict,
+exactly as in personal sync. The service never sees the team passphrase.
+
 ---
 
 ## The registry

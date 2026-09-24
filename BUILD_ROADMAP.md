@@ -208,7 +208,8 @@ record/recent/stats/rotation behaviour, and the dashboard endpoints.
       and version, and conflict detection that never overwrites.
 - [x] `neuron login` / `logout` / `sync`, with sync gated behind the paid plan.
 - [x] `NEURON_SYNC_TOKEN` + `NEURON_PASSPHRASE` for headless and CI use.
-- [ ] Team-shared configs — **not built.** The account model is single-user.
+- [x] Team-shared configs: teams with invite codes, per-team E2E keys, membership checks, and
+      `neuron team create/join/list/sync`.
 - [ ] Launch: Hacker News, Product Hunt, r/ClaudeAI, r/LocalLLaMA, MCP Discord, X, `awesome-mcp`.
 - [ ] Docs site + 2-minute demo video.
 
@@ -222,8 +223,10 @@ record/recent/stats/rotation behaviour, and the dashboard endpoints.
   tested; creating a Checkout Session needs a Stripe secret key, which is the human's to supply.
 - **No browser approval page.** The device flow is real, but approval runs through
   `neuron login --approve <code>` (or `--auto-approve` when self-hosting) instead of a web UI.
-- **Team shared configs are missing.** They were in this phase's scope; the account model is
-  single-user. This is the one scope item Phase 3 did not deliver.
+- **Team sharing uses a shared passphrase, not per-member key wrapping.** It is genuinely
+  end-to-end encrypted and the service learns nothing, but removing a member means rotating the
+  team passphrase. Wrapping the team key to each member's public key (`crypto/ecdh` is in the
+  stdlib) is the correct upgrade and is scoped for Phase 5.
 
 **Acceptance — NOT MET, and not reachable from here.** "1,000 free users, first paying customer" is
 a go-to-market outcome, not a code outcome. The code is ready for it; the launch is the human's.
@@ -249,11 +252,26 @@ $ neuron sync                        # fresh machine, wrong passphrase
 ✗ Sync failed: decrypt secretive: decryption failed: wrong passphrase, …
 PASS: wrong passphrase rejected
 PASS: nothing written on failure
+
+$ neuron team create acme            # owner publishes
+Invite code: 2CFT-TUCA
+$ neuron team sync acme
+✓ Pushed: shared-github
+
+$ neuron team join 2CFT-TUCA         # teammate pulls
+$ neuron team sync acme
+✓ Pulled: shared-github
+
+$ curl .../v1/teams/<id>/blobs       # a non-member
+HTTP 403
+PASS: non-member refused
+PASS: no plaintext command in the team store
 ```
 
-**Tests:** 26 in `cli/internal/sync` and 26 in `cloud/`, covering the crypto envelope, AAD binding,
-tamper rejection, the conflict path, token hashing, blob version monotonicity, account isolation,
-rate limiting, and webhook signature / rotation / replay handling.
+**Tests:** 30 in `cli/internal/sync` and 32 in `cloud/`, covering the crypto envelope, AAD binding
+(per-server and per-team), tamper rejection, the conflict path, token hashing, blob version
+monotonicity, account and team isolation, team membership enforcement, rate limiting, and webhook
+signature / rotation / replay handling.
 
 ---
 

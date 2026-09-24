@@ -67,11 +67,40 @@ type stateFile struct {
 	Hashes   map[string]string `json:"hashes"`
 }
 
-// Sync reconciles every server known locally or remotely.
+// Sync reconciles every server known locally or remotely against the account's
+// own encrypted store.
 //
 // It never deletes and never overwrites a change it did not make: a server that
 // moved on both sides is reported as a conflict instead.
 func (e *Engine) Sync(ctx context.Context) (Result, error) {
+	return e.reconcile(ctx, reconcileTarget{
+		namespace: "account",
+		list:      e.Remote.List,
+		fetch:     e.Remote.Fetch,
+		push:      e.Remote.Push,
+		aad:       func(name string, version int64) []byte { return AAD(name, fmt.Sprint(version)) },
+	}, e.Key)
+}
+
+// SyncTeam reconciles this machine against a team's shared encrypted store,
+// using the team key rather than the account key.
+func (e *Engine) SyncTeam(ctx context.Context, remote TeamRemote, teamID string, teamKey *Key) (Result, error) {
+	return e.reconcile(ctx, reconcileTarget{
+		namespace: "team:" + teamID,
+		list: func(ctx context.Context) ([]string, error) {
+			return remote.TeamBlobs(ctx, teamID)
+		},
+		fetch: func(ctx context.Context, name string) (*RemoteBlob, error) {
+			return remote.FetchTeamBlob(ctx, teamID, name)
+		},
+		push: func(ctx context.Context, blob *RemoteBlob) error {
+			return remote.PushTeamBlob(ctx, teamID, blob)
+		},
+		aad: func(name string, version int64) []byte { return TeamAAD(teamID, name, version) },
+	}, teamKey)
+}
+
+func (e *Engine) reconcile(ctx context.Context, t reconcileTarget, syncKey *Key) (Result, error) {
 	var res Result
 
 	st, err := e.loadState()
@@ -79,7 +108,7 @@ func (e *Engine) Sync(ctx context.Context) (Result, error) {
 		return res, err
 	}
 
-	remoteNames, err := e.Remote.List(ctx)
+	remoteNames, err := t.list(ctx)
 	if err != nil {
 		return res, fmt.Errorf("list remote: %w", err)
 	}
@@ -104,14 +133,15 @@ func (e *Engine) Sync(ctx context.Context) (Result, error) {
 		}
 		localExists := payload != nil
 
-		remote, err := e.Remote.Fetch(ctx, name)
+		remote, err := t.fetch(ctx, name)
 		if err != nil && !errors.Is(err, ErrNotFound) {
 			return res, fmt.Errorf("fetch %s: %w", name, err)
 		}
 		remoteExists := err == nil && remote != nil
 
-		baseVersion := st.Versions[name]
-		localChanged := localExists && hash != st.Hashes[name]
+		skey := stateKey(t.namespace, name)
+		baseVersion := st.Versions[skey]
+		localChanged := localExists && hash != st.Hashes[skey]
 		remoteChanged := remoteExists && remote.Version != baseVersion
 
 		switch {
@@ -119,15 +149,15 @@ func (e *Engine) Sync(ctx context.Context) (Result, error) {
 			continue
 
 		case !localExists && remoteExists:
-			if _, err := e.applyRemote(name, remote); err != nil {
+			if _, err := e.applyRemoteWith(syncKey, name, remote, t); err != nil {
 				return res, err
 			}
-			st.Versions[name] = remote.Version
-			st.Hashes[name] = e.hashIfExists(name)
+			st.Versions[skey] = remote.Version
+			st.Hashes[skey] = e.hashIfExists(name)
 			res.Pulled = append(res.Pulled, name)
 
 		case localExists && !remoteExists:
-			pushed, err := e.push(ctx, name, payload, baseVersion+1)
+			pushed, err := e.pushTo(ctx, t, syncKey, name, payload, baseVersion+1)
 			if err != nil {
 				return res, err
 			}
@@ -138,8 +168,8 @@ func (e *Engine) Sync(ctx context.Context) (Result, error) {
 				})
 				continue
 			}
-			st.Versions[name] = baseVersion + 1
-			st.Hashes[name] = hash
+			st.Versions[skey] = baseVersion + 1
+			st.Hashes[skey] = hash
 			res.Pushed = append(res.Pushed, name)
 
 		case localChanged && remoteChanged:
@@ -149,7 +179,7 @@ func (e *Engine) Sync(ctx context.Context) (Result, error) {
 			})
 
 		case localChanged:
-			pushed, err := e.push(ctx, name, payload, baseVersion+1)
+			pushed, err := e.pushTo(ctx, t, syncKey, name, payload, baseVersion+1)
 			if err != nil {
 				return res, err
 			}
@@ -160,16 +190,16 @@ func (e *Engine) Sync(ctx context.Context) (Result, error) {
 				})
 				continue
 			}
-			st.Versions[name] = baseVersion + 1
-			st.Hashes[name] = hash
+			st.Versions[skey] = baseVersion + 1
+			st.Hashes[skey] = hash
 			res.Pushed = append(res.Pushed, name)
 
 		case remoteChanged:
-			if _, err := e.applyRemote(name, remote); err != nil {
+			if _, err := e.applyRemoteWith(syncKey, name, remote, t); err != nil {
 				return res, err
 			}
-			st.Versions[name] = remote.Version
-			st.Hashes[name] = e.hashIfExists(name)
+			st.Versions[skey] = remote.Version
+			st.Hashes[skey] = e.hashIfExists(name)
 			res.Pulled = append(res.Pulled, name)
 
 		default:
@@ -231,21 +261,21 @@ func payloadHash(p *Payload) (string, error) {
 	return base64.StdEncoding.EncodeToString(sum[:]), nil
 }
 
-// push uploads a payload. It reports false when the remote already holds a
-// newer version — a conflict to surface, not an error to fail on.
-func (e *Engine) push(ctx context.Context, name string, p *Payload, version int64) (bool, error) {
+// pushTo uploads a payload to a target. It reports false when the remote
+// already holds a newer version — a conflict to surface, not an error to fail on.
+func (e *Engine) pushTo(ctx context.Context, t reconcileTarget, syncKey *Key, name string, p *Payload, version int64) (bool, error) {
 	p.Version = version
 
 	plaintext, err := json.Marshal(p)
 	if err != nil {
 		return false, fmt.Errorf("marshal payload for %s: %w", name, err)
 	}
-	envelope, err := e.Key.Seal(plaintext, AAD(name, fmt.Sprint(version)))
+	envelope, err := syncKey.Seal(plaintext, t.aad(name, version))
 	if err != nil {
 		return false, fmt.Errorf("encrypt %s: %w", name, err)
 	}
 
-	err = e.Remote.Push(ctx, &RemoteBlob{
+	err = t.push(ctx, &RemoteBlob{
 		Name:      name,
 		Version:   version,
 		Envelope:  envelope,
@@ -260,9 +290,9 @@ func (e *Engine) push(ctx context.Context, name string, p *Payload, version int6
 	return true, nil
 }
 
-// applyRemote decrypts a blob and writes it into the local store and keychain.
-func (e *Engine) applyRemote(name string, blob *RemoteBlob) (bool, error) {
-	plaintext, err := e.Key.Open(blob.Envelope, AAD(name, fmt.Sprint(blob.Version)))
+// applyRemoteWith decrypts a blob and writes it into the local store and keychain.
+func (e *Engine) applyRemoteWith(syncKey *Key, name string, blob *RemoteBlob, t reconcileTarget) (bool, error) {
+	plaintext, err := syncKey.Open(blob.Envelope, t.aad(name, blob.Version))
 	if err != nil {
 		return false, fmt.Errorf("decrypt %s: %w", name, err)
 	}
