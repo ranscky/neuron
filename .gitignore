@@ -3,6 +3,7 @@
 cli/neuron
 registry/neuron-registry
 registry/registry
+cloud/neuron-cloud
 
 # Any other top-level binaries that show up
 /neuron
