@@ -127,8 +127,16 @@ func (e *Engine) Sync(ctx context.Context) (Result, error) {
 			res.Pulled = append(res.Pulled, name)
 
 		case localExists && !remoteExists:
-			if err := e.push(ctx, name, payload, baseVersion+1); err != nil {
+			pushed, err := e.push(ctx, name, payload, baseVersion+1)
+			if err != nil {
 				return res, err
+			}
+			if !pushed {
+				res.Conflicts = append(res.Conflicts, Conflict{
+					Name:   name,
+					Reason: "another machine pushed a newer version first",
+				})
+				continue
 			}
 			st.Versions[name] = baseVersion + 1
 			st.Hashes[name] = hash
@@ -141,8 +149,16 @@ func (e *Engine) Sync(ctx context.Context) (Result, error) {
 			})
 
 		case localChanged:
-			if err := e.push(ctx, name, payload, baseVersion+1); err != nil {
+			pushed, err := e.push(ctx, name, payload, baseVersion+1)
+			if err != nil {
 				return res, err
+			}
+			if !pushed {
+				res.Conflicts = append(res.Conflicts, Conflict{
+					Name:   name,
+					Reason: "another machine pushed a newer version first",
+				})
+				continue
 			}
 			st.Versions[name] = baseVersion + 1
 			st.Hashes[name] = hash
@@ -215,24 +231,33 @@ func payloadHash(p *Payload) (string, error) {
 	return base64.StdEncoding.EncodeToString(sum[:]), nil
 }
 
-func (e *Engine) push(ctx context.Context, name string, p *Payload, version int64) error {
+// push uploads a payload. It reports false when the remote already holds a
+// newer version — a conflict to surface, not an error to fail on.
+func (e *Engine) push(ctx context.Context, name string, p *Payload, version int64) (bool, error) {
 	p.Version = version
 
 	plaintext, err := json.Marshal(p)
 	if err != nil {
-		return fmt.Errorf("marshal payload for %s: %w", name, err)
+		return false, fmt.Errorf("marshal payload for %s: %w", name, err)
 	}
 	envelope, err := e.Key.Seal(plaintext, AAD(name, fmt.Sprint(version)))
 	if err != nil {
-		return fmt.Errorf("encrypt %s: %w", name, err)
+		return false, fmt.Errorf("encrypt %s: %w", name, err)
 	}
 
-	return e.Remote.Push(ctx, &RemoteBlob{
+	err = e.Remote.Push(ctx, &RemoteBlob{
 		Name:      name,
 		Version:   version,
 		Envelope:  envelope,
 		UpdatedAt: time.Now().UTC(),
 	})
+	if errors.Is(err, ErrStaleVersion) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("push %s: %w", name, err)
+	}
+	return true, nil
 }
 
 // applyRemote decrypts a blob and writes it into the local store and keychain.

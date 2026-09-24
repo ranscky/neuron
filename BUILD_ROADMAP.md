@@ -198,17 +198,62 @@ record/recent/stats/rotation behaviour, and the dashboard endpoints.
 
 ---
 
-## Phase 3 — Paid tier + launch (Weeks 6–8)
+## Phase 3 — Paid tier + sync service — 🟡 CODE COMPLETE 2026-09-23, LAUNCH PENDING
 
 **Goal:** first revenue.
 
-- [ ] Cloud service: device auth, config sync, **end-to-end encrypted** secrets, opt-in history sync.
-- [ ] `neuron login`, Stripe subscriptions, license gating.
-- [ ] Team-shared configs.
-- [ ] Launch: Hacker News, Product Hunt, r/ClaudeAI, r/LocalLLaMA, MCP Discord, X, `awesome-mcp` lists.
+- [x] Cloud service (`cloud/`): device auth, encrypted blob sync, rate limiting, Stripe webhook
+      verification, plan state. Self-hostable and dependency-free.
+- [x] End-to-end encrypted sync: client-side key derivation, AEAD envelopes bound to the server name
+      and version, and conflict detection that never overwrites.
+- [x] `neuron login` / `logout` / `sync`, with sync gated behind the paid plan.
+- [x] `NEURON_SYNC_TOKEN` + `NEURON_PASSPHRASE` for headless and CI use.
+- [ ] Team-shared configs — **not built.** The account model is single-user.
+- [ ] Launch: Hacker News, Product Hunt, r/ClaudeAI, r/LocalLLaMA, MCP Discord, X, `awesome-mcp`.
 - [ ] Docs site + 2-minute demo video.
 
-**Acceptance:** 1,000 free users, $20/mo tier live, **first paying customer**.
+**Deviations, recorded honestly:**
+
+- **PBKDF2, not Argon2id.** `golang.org/x/crypto` could not be installed — the module cache is
+  read-only in this environment — so Go's stdlib `crypto/pbkdf2` is used at 600k iterations
+  (OWASP's recommendation). Argon2id is memory-hard and strictly better. The envelope is versioned
+  and self-describing, so this is a clean migration once the dependency can be added.
+- **No Stripe Checkout creation.** Webhook verification and plan transitions are implemented and
+  tested; creating a Checkout Session needs a Stripe secret key, which is the human's to supply.
+- **No browser approval page.** The device flow is real, but approval runs through
+  `neuron login --approve <code>` (or `--auto-approve` when self-hosting) instead of a web UI.
+- **Team shared configs are missing.** They were in this phase's scope; the account model is
+  single-user. This is the one scope item Phase 3 did not deliver.
+
+**Acceptance — NOT MET, and not reachable from here.** "1,000 free users, first paying customer" is
+a go-to-market outcome, not a code outcome. The code is ready for it; the launch is the human's.
+
+**Evidence (two machines, isolated `$HOME`, against the real service over HTTP):**
+
+```
+$ neuron sync                        # machine A
+✓ Pushed: demo
+
+$ neuron sync                        # machine B, same passphrase
+✓ Pulled: demo
+$ cat ~/.neuron/mcp/servers.json
+{ "demo": { "command": "echo", "args": ["hi"] } }
+
+$ neuron sync                        # machine B again
+→ Everything is already in sync.
+
+$ grep '"command"' <server data>     # the service only ever holds ciphertext
+PASS: no plaintext command in server store
+
+$ neuron sync                        # fresh machine, wrong passphrase
+✗ Sync failed: decrypt secretive: decryption failed: wrong passphrase, …
+PASS: wrong passphrase rejected
+PASS: nothing written on failure
+```
+
+**Tests:** 26 in `cli/internal/sync` and 26 in `cloud/`, covering the crypto envelope, AAD binding,
+tamper rejection, the conflict path, token hashing, blob version monotonicity, account isolation,
+rate limiting, and webhook signature / rotation / replay handling.
 
 ---
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,11 +11,13 @@ import (
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/fatih/color"
 	"github.com/ranscky/neuron/internal/config"
 	"github.com/ranscky/neuron/internal/proxy"
+	"github.com/ranscky/neuron/internal/sync"
 	"github.com/ranscky/neuron/pkg/executor"
 	"github.com/ranscky/neuron/pkg/installer"
 	"github.com/ranscky/neuron/pkg/lockfile"
@@ -1382,6 +1385,283 @@ func init() {
 	uiCmd.Flags().IntVar(&uiPort, "port", 7717, "port to serve the dashboard on")
 	rootCmd.AddCommand(uiCmd)
 
+	// --- sync service -----------------------------------------------------
+
+	var (
+		loginServer      string
+		loginAccount     string
+		loginApprove     string
+		loginAutoApprove bool
+	)
+
+	loginCmd := &cobra.Command{
+		Use:   "login",
+		Short: "Sign in to a Neuron sync service",
+		Long: "Authorise this machine against a Neuron sync service. Secrets are encrypted on this " +
+			"machine before upload, so the service only ever stores ciphertext.",
+		Args: cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			ctx := cmd.Context()
+
+			// Approve-only mode, run from another terminal or another machine.
+			if loginApprove != "" {
+				auth, authErr := sync.LoadAuth()
+				accountID := loginAccount
+				if accountID == "" && authErr == nil {
+					accountID = auth.AccountID
+				}
+				serverURL := loginServer
+				if serverURL == "" && authErr == nil {
+					serverURL = auth.BaseURL
+				}
+				if accountID == "" || serverURL == "" {
+					ui.Error("Pass --account <id> and --server <url> to approve from this machine.")
+					os.Exit(1)
+				}
+				if err := sync.NewClient(serverURL).ApproveDeviceCode(ctx, strings.ToUpper(loginApprove), accountID); err != nil {
+					ui.Error(fmt.Sprintf("Failed to approve device: %v", err))
+					os.Exit(1)
+				}
+				ui.Success("Device approved — the other machine can finish signing in")
+				return
+			}
+
+			serverURL := loginServer
+			if serverURL == "" {
+				serverURL = os.Getenv("NEURON_SYNC_SERVER")
+			}
+			if serverURL == "" {
+				serverURL = "http://127.0.0.1:8080"
+			}
+
+			accountID := loginAccount
+			if accountID == "" {
+				if existing, err := sync.LoadAuth(); err == nil {
+					accountID = existing.AccountID
+					serverURL = existing.BaseURL
+				}
+			}
+
+			client := sync.NewClient(serverURL)
+			if accountID == "" {
+				salt, err := sync.NewSalt()
+				if err != nil {
+					ui.Error(fmt.Sprintf("Could not generate a salt: %v", err))
+					os.Exit(1)
+				}
+				accountID, err = client.CreateAccount(ctx, "", salt)
+				if err != nil {
+					ui.Error(fmt.Sprintf("Could not create a sync account: %v", err))
+					os.Exit(1)
+				}
+				ui.Info("Created sync account " + accountID)
+				ui.Step("Note the account id — you need it to sign in on another machine.")
+			}
+
+			code, err := client.RequestDeviceCode(ctx)
+			if err != nil {
+				ui.Error(fmt.Sprintf("Could not start the device flow: %v", err))
+				os.Exit(1)
+			}
+
+			if loginAutoApprove {
+				if err := client.ApproveDeviceCode(ctx, code.UserCode, accountID); err != nil {
+					ui.Error(fmt.Sprintf("Could not approve this device: %v", err))
+					os.Exit(1)
+				}
+			} else {
+				fmt.Printf("User code: %s\n", color.CyanString(code.UserCode))
+				ui.Step("Approve this device from another terminal with:")
+				fmt.Printf("  neuron login --approve %s --account %s --server %s\n", code.UserCode, accountID, serverURL)
+			}
+
+			deadline := time.Now().Add(10 * time.Minute)
+			if code.ExpiresIn > 0 {
+				deadline = time.Now().Add(time.Duration(code.ExpiresIn) * time.Second)
+			}
+			interval := time.Duration(code.Interval) * time.Second
+			if interval <= 0 {
+				interval = 2 * time.Second
+			}
+
+			var token string
+			for {
+				token, err = client.PollDeviceToken(ctx, code.DeviceCode)
+				if err == nil {
+					break
+				}
+				if !errors.Is(err, sync.ErrPending) {
+					ui.Error(fmt.Sprintf("Sign-in failed: %v", err))
+					os.Exit(1)
+				}
+				if time.Now().After(deadline) {
+					ui.Error("Timed out waiting for approval.")
+					os.Exit(1)
+				}
+				time.Sleep(interval)
+			}
+
+			// The service is authoritative for the salt and the plan.
+			account, err := client.WithToken(token).GetAccount(ctx)
+			if err != nil {
+				ui.Error(fmt.Sprintf("Could not read the account: %v", err))
+				os.Exit(1)
+			}
+
+			secretStore := secrets.NewStore()
+			if err := secretStore.Set(sync.TokenKey, token); err != nil {
+				ui.Error(fmt.Sprintf("Could not store the session in your keychain: %v", err))
+				os.Exit(1)
+			}
+
+			auth := &sync.Auth{
+				BaseURL:    serverURL,
+				AccountID:  account.AccountID,
+				Salt:       account.Salt,
+				Plan:       account.Plan,
+				SignedInAt: time.Now().UTC(),
+			}
+			if err := sync.SaveAuth(auth); err != nil {
+				ui.Error(fmt.Sprintf("Could not save the session: %v", err))
+				os.Exit(1)
+			}
+
+			ui.Success(fmt.Sprintf("Signed in as %s (plan: %s)", auth.AccountID, auth.Plan))
+			if auth.Plan != "pro" {
+				ui.Info("Encrypted sync needs the paid plan. Local configuration stays free.")
+			}
+		},
+	}
+	loginCmd.Flags().StringVar(&loginServer, "server", "", "sync service base URL")
+	loginCmd.Flags().StringVar(&loginAccount, "account", "", "existing account id to sign in to")
+	loginCmd.Flags().StringVar(&loginApprove, "approve", "", "approve a pending user code instead of signing in")
+	loginCmd.Flags().BoolVar(&loginAutoApprove, "auto-approve", false, "approve this device automatically (self-hosted convenience)")
+
+	logoutCmd := &cobra.Command{
+		Use:   "logout",
+		Short: "Sign out of the sync service",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			ctx := cmd.Context()
+
+			auth, err := sync.LoadAuth()
+			if err != nil {
+				ui.Info("Not signed in.")
+				return
+			}
+
+			secretStore := secrets.NewStore()
+			if token, err := secretStore.Get(sync.TokenKey); err == nil {
+				if err := sync.NewClient(auth.BaseURL).WithToken(token).Logout(ctx); err != nil {
+					ui.Warn(fmt.Sprintf("Could not revoke the session server-side: %v", err))
+				}
+				_ = secretStore.Delete(sync.TokenKey)
+			}
+			if err := sync.ClearAuth(); err != nil {
+				ui.Error(fmt.Sprintf("Could not clear the local session: %v", err))
+				os.Exit(1)
+			}
+			ui.Success("Signed out")
+		},
+	}
+
+	var syncPassphrase string
+	syncCmd := &cobra.Command{
+		Use:   "sync",
+		Short: "Sync MCP servers and secrets to your other machines",
+		Long: "Reconcile this machine's MCP servers with the encrypted copy in your sync account. " +
+			"Secrets are encrypted here before upload, and a server changed in two places is reported " +
+			"as a conflict rather than silently overwritten.",
+		Args: cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			ctx := cmd.Context()
+
+			auth, err := sync.LoadAuth()
+			if err != nil {
+				ui.Error("Not signed in. Run `neuron login` first.")
+				os.Exit(1)
+			}
+
+			secretStore := secrets.NewStore()
+			// NEURON_SYNC_TOKEN exists for headless and CI use, where there is no
+			// OS keychain. Interactive users should use `neuron login`.
+			token := os.Getenv("NEURON_SYNC_TOKEN")
+			if token == "" {
+				stored, tokenErr := secretStore.Get(sync.TokenKey)
+				if tokenErr != nil {
+					ui.Error("No stored session found. Run `neuron login`, or set NEURON_SYNC_TOKEN for headless use.")
+					os.Exit(1)
+				}
+				token = stored
+			}
+
+			passphrase, err := resolvePassphrase(syncPassphrase)
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+			salt, err := auth.SaltBytes()
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+			key, err := sync.DeriveKey(passphrase, salt, 0)
+			if err != nil {
+				ui.Error(fmt.Sprintf("Could not derive the encryption key: %v", err))
+				os.Exit(1)
+			}
+
+			store, err := mcp.NewStore()
+			if err != nil {
+				ui.Error(fmt.Sprintf("Failed to open MCP store: %v", err))
+				os.Exit(1)
+			}
+
+			client := sync.NewClient(auth.BaseURL).WithToken(token)
+			engine, err := sync.NewEngine(store, secretStore, client, key)
+			if err != nil {
+				ui.Error(fmt.Sprintf("Could not start sync: %v", err))
+				os.Exit(1)
+			}
+
+			res, err := engine.Sync(ctx)
+			switch {
+			case errors.Is(err, sync.ErrPaymentRequired):
+				ui.Warn("Encrypted sync requires the paid plan. Local configuration stays free.")
+				os.Exit(1)
+			case errors.Is(err, sync.ErrUnauthorized):
+				ui.Error("Your session has expired. Run `neuron login` again.")
+				os.Exit(1)
+			case err != nil:
+				ui.Error(fmt.Sprintf("Sync failed: %v", err))
+				os.Exit(1)
+			}
+
+			if len(res.Pushed) > 0 {
+				ui.Success("Pushed: " + strings.Join(res.Pushed, ", "))
+			}
+			if len(res.Pulled) > 0 {
+				ui.Success("Pulled: " + strings.Join(res.Pulled, ", "))
+			}
+			if len(res.Unchanged) > 0 {
+				ui.Info("Already in sync: " + strings.Join(res.Unchanged, ", "))
+			}
+			if len(res.Conflicts) > 0 {
+				for _, conflict := range res.Conflicts {
+					ui.Warn(fmt.Sprintf("Conflict on %s: %s", conflict.Name, conflict.Reason))
+				}
+				ui.Warn("Edit the server on one machine, then sync again. Nothing was overwritten.")
+				os.Exit(2)
+			}
+			if len(res.Pushed) == 0 && len(res.Pulled) == 0 {
+				ui.Info("Everything is already in sync.")
+			}
+		},
+	}
+	syncCmd.Flags().StringVar(&syncPassphrase, "passphrase", "", "sync passphrase (or set NEURON_PASSPHRASE)")
+
+	rootCmd.AddCommand(loginCmd, logoutCmd, syncCmd)
+
 	// runFlowCmd represents the run-flow command
 	runFlowCmd := &cobra.Command{
 		Use:   "run-flow <workflow_path> <query>",
@@ -1442,6 +1722,26 @@ func init() {
 	}
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.Version = Version
+}
+
+// resolvePassphrase returns the sync passphrase from the flag, the environment,
+// or an interactive prompt, in that order.
+func resolvePassphrase(flagValue string) (string, error) {
+	if flagValue != "" {
+		return flagValue, nil
+	}
+	if fromEnv := os.Getenv("NEURON_PASSPHRASE"); fromEnv != "" {
+		return fromEnv, nil
+	}
+
+	var value string
+	if err := survey.AskOne(&survey.Password{Message: "Sync passphrase"}, &value); err != nil {
+		return "", fmt.Errorf("could not read the passphrase: %w", err)
+	}
+	if value == "" {
+		return "", errors.New("the passphrase must not be empty")
+	}
+	return value, nil
 }
 
 func main() {

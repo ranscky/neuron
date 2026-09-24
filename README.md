@@ -134,6 +134,35 @@ to the client unmodified.
 
 ---
 
+## Sync across machines
+
+```bash
+# bring up the service (self-hostable, dependency-free)
+cd cloud
+NEURON_CLOUD_DATA=./data/cloud.json PORT=8080 go run ./cmd/neuron-cloud
+
+# sign this machine in with a device flow
+neuron login --server http://127.0.0.1:8080
+
+# push and pull servers and secrets
+neuron sync
+```
+
+Sync is **end-to-end encrypted**. Your passphrase never leaves the machine: the
+service stores only AES-256-GCM ciphertext, in envelopes bound to the server
+name and version, so a compromised service cannot serve one server's payload in
+place of another's. A server changed on two machines is reported as a conflict
+and left untouched rather than silently overwritten.
+
+The session token lives in your OS keychain, never in a config file. For
+headless or CI use, set `NEURON_SYNC_TOKEN` and `NEURON_PASSPHRASE` instead.
+
+Encrypted sync is the paid feature; local configuration management, secrets and
+the dashboard stay free. Self-hosters can lift the gate by starting the service
+with `NEURON_REQUIRE_PRO=false`.
+
+---
+
 ## The registry
 
 10 official packages across 4 categories:
@@ -263,7 +292,7 @@ The full plan lives in [BUILD_ROADMAP.md](BUILD_ROADMAP.md).
 - [x] Atomic config writes with backups; unknown keys preserved
 - [ ] CI (vet, build, test) for both modules — not pushed yet; the token lacks `workflow` scope
 - [x] Local MCP proxy with tool-call history and a dashboard (Phase 2)
-- [ ] Cloud sync, team configs, and the $20/mo Pro tier (Phase 3)
+- [x] E2E-encrypted sync, self-hostable service, `neuron login/logout/sync` (Phase 3)
 - [ ] Registry package distribution for agents, tools, and models
 - [ ] Node.js runtime
 - [ ] Policy engine, audit log, SSO — the enterprise gateway (Phase 5)

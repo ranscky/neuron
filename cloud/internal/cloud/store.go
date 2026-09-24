@@ -77,6 +77,9 @@ type persisted struct {
 	Accounts    map[string]*Account         `json:"accounts"`
 	Blobs       map[string]map[string]*Blob `json:"blobs"`
 	DeviceCodes map[string]*DeviceCode      `json:"device_codes"`
+	// ProcessedEvents makes billing webhooks idempotent: Stripe retries, and a
+	// retry must not re-apply a plan change.
+	ProcessedEvents map[string]time.Time `json:"processed_events"`
 }
 
 // Store is a mutex-guarded, file-backed store. It is deliberately boring: one
@@ -110,10 +113,11 @@ func Open(path string) (*Store, error) {
 
 func emptyData() persisted {
 	return persisted{
-		Tokens:      map[string]tokenRecord{},
-		Accounts:    map[string]*Account{},
-		Blobs:       map[string]map[string]*Blob{},
-		DeviceCodes: map[string]*DeviceCode{},
+		Tokens:          map[string]tokenRecord{},
+		Accounts:        map[string]*Account{},
+		Blobs:           map[string]map[string]*Blob{},
+		DeviceCodes:     map[string]*DeviceCode{},
+		ProcessedEvents: map[string]time.Time{},
 	}
 }
 
@@ -129,6 +133,9 @@ func (s *Store) ensureMaps() {
 	}
 	if s.data.DeviceCodes == nil {
 		s.data.DeviceCodes = map[string]*DeviceCode{}
+	}
+	if s.data.ProcessedEvents == nil {
+		s.data.ProcessedEvents = map[string]time.Time{}
 	}
 }
 
@@ -209,6 +216,25 @@ func (s *Store) SetStripe(accountID, customerID, subscriptionID string) error {
 	account.StripeCustomerID = customerID
 	account.StripeSubscriptionID = subscriptionID
 	return s.saveLocked()
+}
+
+// FindAccountByStripeCustomer resolves an account from a Stripe customer id.
+// Subscription lifecycle events do not always carry our metadata, so the
+// customer id is the fallback key.
+func (s *Store) FindAccountByStripeCustomer(customerID string) (string, error) {
+	if customerID == "" {
+		return "", ErrNotFound
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for id, account := range s.data.Accounts {
+		if account.StripeCustomerID == customerID {
+			return id, nil
+		}
+	}
+	return "", ErrNotFound
 }
 
 // ListBlobs returns the names of every blob an account has, sorted.
@@ -373,6 +399,26 @@ func (s *Store) RevokeToken(token string) error {
 	defer s.mu.Unlock()
 
 	delete(s.data.Tokens, hashToken(token))
+	return s.saveLocked()
+}
+
+// HasProcessedEvent reports whether a billing event was already applied.
+func (s *Store) HasProcessedEvent(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.data.ProcessedEvents[id]
+	return ok
+}
+
+// MarkEventProcessed records that a billing event has been applied.
+func (s *Store) MarkEventProcessed(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.data.ProcessedEvents == nil {
+		s.data.ProcessedEvents = map[string]time.Time{}
+	}
+	s.data.ProcessedEvents[id] = time.Now().UTC()
 	return s.saveLocked()
 }
 
