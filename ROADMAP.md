@@ -1,5 +1,10 @@
 # 🧠 Neuron Roadmap: The Path to the AI Operating System
 
+> **Superseded.** This is the original long-range vision. The authoritative,
+> week-by-week plan (with acceptance criteria and status) is
+> [`BUILD_ROADMAP.md`](BUILD_ROADMAP.md). Many items below shipped as part of
+> the MCP control plane rather than the package manager.
+
 Neuron is not just a package manager; it is a distribution and orchestration layer for AI tools, agents, and models. The goal is to transition from a "Distribution Layer" (v1) to an "Orchestration Layer" (v2) and finally a "Governance Protocol" (v3).
 
 ## 🏁 Phase 1: Infrastructure Bedrock (Hardening the MVP)

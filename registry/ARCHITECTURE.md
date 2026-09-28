@@ -96,8 +96,9 @@ simple to back up, simple to migrate later.
 as a map. Search is a simple string contains check on name and
 description. Fast enough for thousands of packages.
 
-**No auth for MVP.** Publishing is open for now. Auth comes in Phase 3
-when the verified badge program launches.
+**No auth.** Publishing is open — anyone who can reach the service can publish.
+Do not run an untrusted public instance. API-key auth and org-scoped storage are
+planned.
 
 **CORS enabled.** The registry should be accessible from any client
 including browser-based tools.

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 )
 
-// Lockfile handles neuron.lock generation and reading
+// Lockfile handles ~/.neuron/lock.json generation and reading
 type Lockfile struct {
 	path string
 	data map[string]string
