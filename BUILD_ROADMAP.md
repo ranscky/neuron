@@ -280,13 +280,12 @@ Not a roadmap phase; recorded so the state is unambiguous.
 
 - [x] **Relicensed to MIT.** The `LICENSE` file was Apache-2.0 while the README said MIT; the human
       chose MIT. `LICENSE` and the README now agree.
-- [x] **CI written** — `.github/workflows/ci.yml` builds, vets and `-race`-tests all three modules
-      (`cli`, `registry`, `cloud`) on push to `main` and on PRs. Verified green locally; pushing the
-      workflow still requires a token with `workflow` scope.
-- [x] **Docs site written** under `docs/` (getting started, MCP, secrets, observability, sync,
-      registry, manifest reference, CLI reference, architecture) plus
-      `.github/workflows/pages.yml` to publish it to GitHub Pages. Enable Pages → Source: GitHub
-      Actions once to switch it on.
+- [x] **CI written and green** — `.github/workflows/ci.yml` builds, vets and `-race`-tests all three
+      modules (`cli`, `registry`, `cloud`) on push to `main` and on PRs. Passing on GitHub Actions
+      (run 36406070988).
+- [x] **Docs site written and live** under `docs/` (getting started, MCP, secrets, observability,
+      sync, registry, manifest reference, CLI reference, architecture), published to GitHub Pages by
+      `.github/workflows/pages.yml` at <https://ranscky.github.io/neuron/>.
 - [x] **Corrected false claims** in `cli/ARCHITECTURE.md`: the deleted sandbox and the unenforced
       `http` permission were still described as enforced.
 - [x] **`phase-1/registry-auth` abandoned (human decision).** The branch is based on `4b9781d`,

@@ -1,7 +1,7 @@
 name: Docs
 
 # Build the docs/ site with Jekyll and publish it to GitHub Pages.
-# Enable Pages once in Settings → Pages → Source: GitHub Actions.
+# Pages is enabled for this repo (Settings → Pages → Source: GitHub Actions).
 on:
   push:
     branches: [main]
