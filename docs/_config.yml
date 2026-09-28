@@ -1,0 +1,18 @@
+title: Neuron
+description: The MCP control plane for developers — install, configure, secure and debug every MCP server across every AI client.
+theme: minima
+
+# Order of the top navigation bar.
+header_pages:
+  - getting-started.md
+  - mcp.md
+  - secrets.md
+  - observability.md
+  - sync.md
+  - registry.md
+  - manifest.md
+  - cli-reference.md
+  - architecture.md
+
+# Don't render timestamps or "edit this page" chrome.
+show_excerpts: false

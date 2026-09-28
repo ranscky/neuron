@@ -68,8 +68,7 @@ lockfile, executor, workflow runner.
 - [x] Add `.gitignore`; `git rm --cached` all binaries, `__pycache__`, `test.tar.gz`.
       *Landed in parallel via the merged `phase-0/repo-hygiene` PR, whose `.gitignore` is more
       complete than the draft here.*
-- [x] `LICENSE` present. The merged hygiene PR chose **Apache-2.0**, while the README's License
-      section still says MIT. Settling that is the human's call — I did not silently relicense.
+- [x] `LICENSE` settled **2026-09-28**: relicensed to **MIT** to match the README (human decision).
 - [ ] CI workflow written but **not pushed** — the GitHub token lacks `workflow` scope, and the human
       chose to drop it for now. Tests are run locally (`go vet` + `go test`).
 - [x] Delete `cli/pkg/runtime/sandbox.go` (dead) and drop the "sandboxed runtime" claim from the README and CLI help.
@@ -272,6 +271,31 @@ PASS: no plaintext command in the team store
 (per-server and per-team), tamper rejection, the conflict path, token hashing, blob version
 monotonicity, account and team isolation, team membership enforcement, rate limiting, and webhook
 signature / rotation / replay handling.
+
+---
+
+## 2026-09-28 — Housekeeping session (docs, CI, license, branch triage)
+
+Not a roadmap phase; recorded so the state is unambiguous.
+
+- [x] **Relicensed to MIT.** The `LICENSE` file was Apache-2.0 while the README said MIT; the human
+      chose MIT. `LICENSE` and the README now agree.
+- [x] **CI written** — `.github/workflows/ci.yml` builds, vets and `-race`-tests all three modules
+      (`cli`, `registry`, `cloud`) on push to `main` and on PRs. Verified green locally; pushing the
+      workflow still requires a token with `workflow` scope.
+- [x] **Docs site written** under `docs/` (getting started, MCP, secrets, observability, sync,
+      registry, manifest reference, CLI reference, architecture) plus
+      `.github/workflows/pages.yml` to publish it to GitHub Pages. Enable Pages → Source: GitHub
+      Actions once to switch it on.
+- [x] **Corrected false claims** in `cli/ARCHITECTURE.md`: the deleted sandbox and the unenforced
+      `http` permission were still described as enforced.
+- [x] **`phase-1/registry-auth` abandoned (human decision).** The branch is based on `4b9781d`,
+      *before* Phases 1–3, so a merge would have reverted the proxy, sync, cloud and MCP work. It also
+      does not compile: it imports `pkg/auth`, `handlers.NewAuthHandler` and
+      `store.MigrateLegacyPackages`, none of which exist on the branch, and its CLI registry-client
+      API conflicts with the shipped one. Registry auth (API keys, org-scoped storage) will be
+      **rebuilt from scratch** as its own scoped effort rather than resurrected from this branch. The
+      branch is left in place on the remote, untouched; it may be deleted.
 
 ---
 

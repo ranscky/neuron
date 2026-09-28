@@ -305,7 +305,7 @@ The full plan lives in [BUILD_ROADMAP.md](BUILD_ROADMAP.md).
 - [x] Cross-client MCP management — `neuron mcp add/sync/list/doctor`
 - [x] Keychain-backed secrets that never touch client configs
 - [x] Atomic config writes with backups; unknown keys preserved
-- [ ] CI (vet, build, test) for both modules — not pushed yet; the token lacks `workflow` scope
+- [x] CI (build, vet, race tests) for all three modules — written; pushing the workflow needs a token with `workflow` scope
 - [x] Local MCP proxy with tool-call history and a dashboard (Phase 2)
 - [x] E2E-encrypted sync, self-hostable service, `neuron login/logout/sync` (Phase 3)
 - [ ] Registry package distribution for agents, tools, and models
@@ -325,6 +325,8 @@ neuron/
 
 Full architecture details in [cli/ARCHITECTURE.md](cli/ARCHITECTURE.md)
 and [registry/ARCHITECTURE.md](registry/ARCHITECTURE.md).
+
+In-depth documentation lives in [`docs/`](docs/index.md).
 
 ---
 

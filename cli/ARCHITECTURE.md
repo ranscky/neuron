@@ -4,8 +4,8 @@
 
 Neuron is a CLI-based distribution layer for AI tools, agents, and MCP servers.
 Think npm, but for AI. Developers can publish, discover, install, and run AI tools
-with a single command. Neuron handles versioning, dependencies, secrets, and
-sandboxed execution.
+with a single command. Neuron handles versioning, dependencies, and secrets, and
+scopes which credentials a package receives.
 
 ---
 
@@ -82,9 +82,9 @@ neuron/
 │   │   └── publish.go        # Publishing a package to the registry
 │   ├── runtime/
 │   │   ├── runtime.go        # Runtime interface
-│   │   ├── sandbox.go        # Permission enforcement and sandboxing
 │   │   ├── python.go         # Python runtime executor
-│   │   └── node.go           # Node runtime executor
+│   │   ├── node.go           # Node runtime executor
+│   │   └── utils.go          # Shared runtime helpers
 │   ├── installer/
 │   │   ├── installer.go      # Download and install packages
 │   │   └── lockfile.go       # neuron.lock generation and reading
@@ -107,13 +107,15 @@ neuron/
 capability requirements, never specific provider names. This keeps Neuron neutral
 across OpenAI, Anthropic, local models, etc.
 
-**Permission model first.** Every package must declare its permissions upfront in
-`neuron.json`. The runtime enforces these. No undeclared HTTP calls, no undeclared
-env var access. This builds trust in the ecosystem.
+**Permission-scoped secrets.** Every package declares its permissions upfront in
+`neuron.json`. The runtime enforces the `env:` permissions: a package receives an
+environment variable only if it declares `env:NAME`, so installing one tool never
+exposes another tool's credentials. The `http` permission is **not** enforced yet
+— there is no network proxy — so treat it as documentation, not a boundary.
 
-**MCP as a first-class citizen.** Packages that expose MCP servers are
-auto-detected and can be registered with any MCP-compatible client via
-`neuron run <package> --mcp`.
+**MCP as a first-class citizen.** Packages that expose an MCP server declare it
+in `neuron.json`; `neuron install` registers it and syncs it to every detected
+client (see `docs/mcp.md`).
 
 **Semver everywhere.** Package versioning strictly follows semver. The resolver
 handles `^`, `~`, and exact pins the same way npm does.
