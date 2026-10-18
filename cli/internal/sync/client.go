@@ -117,10 +117,11 @@ func (c *Client) CreateAccount(ctx context.Context, email string, salt []byte) (
 
 // DeviceCode is a pending device authorisation.
 type DeviceCode struct {
-	DeviceCode string `json:"device_code"`
-	UserCode   string `json:"user_code"`
-	Interval   int    `json:"interval"`
-	ExpiresIn  int    `json:"expires_in"`
+	DeviceCode      string `json:"device_code"`
+	UserCode        string `json:"user_code"`
+	VerificationURI string `json:"verification_uri"`
+	Interval        int    `json:"interval"`
+	ExpiresIn       int    `json:"expires_in"`
 }
 
 // RequestDeviceCode starts the device authorisation flow.

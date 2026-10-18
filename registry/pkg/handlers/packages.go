@@ -23,24 +23,24 @@ func NewPackagesHandler(s store.Store) *PackagesHandler {
 func (h *PackagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Strip /v1/packages/ prefix from the path
 	path := strings.TrimPrefix(r.URL.Path, "/v1/packages/")
-	
+
 	// Handle empty path
 	if path == "" || path == "/" {
 		http.Error(w, `{"error": "not found"}`, http.StatusNotFound)
 		return
 	}
-	
+
 	// Remove leading slash if present
 	path = strings.TrimPrefix(path, "/")
-	
+
 	w.Header().Set("Content-Type", "application/json")
 
 	// Parse the path to extract name and version/action
 	// For paths with slashes in package names, we need to manually parse
 	// We'll split by "/" and analyze the last segments to determine the action
-	
+
 	segments := strings.Split(path, "/")
-	
+
 	// Handle different path patterns
 	switch {
 	case len(segments) >= 2 && segments[len(segments)-1] == "download":
@@ -53,19 +53,19 @@ func (h *PackagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		version := segments[len(segments)-2]
 		name := strings.Join(segments[:len(segments)-2], "/")
 		h.handleDownloadPackage(w, r, name, version)
-		
+
 	case len(segments) >= 2 && segments[len(segments)-1] == "versions":
 		// GET /v1/packages/:name/versions
 		// Name is everything except the last segment
 		name := strings.Join(segments[:len(segments)-1], "/")
 		h.handleListVersions(w, r, name)
-		
+
 	case len(segments) >= 2:
 		// GET /v1/packages/:name/:version
 		// Check if the last segment is a version or if it's just a name with slashes
 		version := segments[len(segments)-1]
 		name := strings.Join(segments[:len(segments)-1], "/")
-		
+
 		// If the last segment looks like a version (contains dots or numbers), treat as version
 		// Otherwise, treat as just a name request
 		if strings.Contains(version, ".") || strings.ContainsAny(version, "0123456789") {
@@ -74,11 +74,11 @@ func (h *PackagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// This is just a name with slashes
 			h.handleGetPackage(w, r, path)
 		}
-		
+
 	case len(segments) == 1 && segments[0] != "":
 		// GET /v1/packages/:name (simple name without slashes)
 		h.handleGetPackage(w, r, segments[0])
-		
+
 	default:
 		http.Error(w, `{"error": "not found"}`, http.StatusNotFound)
 	}

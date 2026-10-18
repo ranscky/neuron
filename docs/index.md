@@ -51,9 +51,8 @@ the stable, tested core today.
 ## Two-minute tour
 
 ```bash
-# install (from source for now)
-git clone https://github.com/ranscky/neuron && cd neuron/cli
-go build -o neuron ./cmd/neuron && sudo mv neuron /usr/local/bin/neuron
+# install (release binary, checksum-verified)
+curl -fsSL https://raw.githubusercontent.com/ranscky/neuron/main/scripts/install.sh | sh
 
 # what does Neuron manage, and which clients did it find?
 neuron mcp list

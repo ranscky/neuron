@@ -82,7 +82,7 @@ func TestSyncTeamSharesServersAndSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	teamKey, err := DeriveKey("team-passphrase", salt, testIterations)
+	teamKey, err := testKeyFor("team-passphrase", salt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestTeamAADPreventsCrossTeamReplay(t *testing.T) {
 }
 
 func TestTeamStoreRoundTrip(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setHome(t)
 
 	store, err := LoadTeams()
 	if err != nil {

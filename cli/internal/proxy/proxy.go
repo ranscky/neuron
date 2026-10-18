@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -74,19 +75,278 @@ type pendingCall struct {
 	tokensIn int
 }
 
-type pump struct {
+// LineSource yields newline-terminated messages from an MCP client.
+type LineSource interface {
+	// Next returns the next message, or ok=false once the client is done.
+	Next() (line []byte, ok bool)
+}
+
+// ReaderSource adapts an io.Reader to a LineSource. Messages are copied out, so
+// the source can outlive the buffer a message was read into.
+type ReaderSource struct{ scanner *bufio.Scanner }
+
+// NewReaderSource wraps a reader. A nil reader yields no messages.
+func NewReaderSource(r io.Reader) *ReaderSource {
+	if r == nil {
+		r = strings.NewReader("")
+	}
+	return &ReaderSource{scanner: newScanner(r)}
+}
+
+// Next implements LineSource.
+func (r *ReaderSource) Next() ([]byte, bool) {
+	if !r.scanner.Scan() {
+		return nil, false
+	}
+	line := r.scanner.Bytes()
+	out := make([]byte, len(line))
+	copy(out, line)
+	return out, true
+}
+
+// ServerTarget is where client messages go. An implementation may swap the
+// underlying server (after a restart) or block until one is available again.
+type ServerTarget interface {
+	// Write delivers one message, reporting false once the session is over.
+	Write(line []byte) bool
+}
+
+// WriteCloserTarget sends messages straight to one server process.
+type WriteCloserTarget struct{ W io.WriteCloser }
+
+// Write implements ServerTarget.
+func (t WriteCloserTarget) Write(line []byte) bool {
+	_, err := t.W.Write(line)
+	return err == nil
+}
+
+// Session proxies one client's MCP session, possibly across several server
+// processes. It owns the pending-request bookkeeping, so a request sent to a
+// process that has since died can be answered rather than left hanging.
+type Session struct {
 	server  string
 	rec     Recorder
+	out     io.Writer
+	writeMu sync.Mutex
+	guard   Guard
+
 	mu      sync.Mutex
 	pending map[string]*pendingCall
 }
 
-// Pump proxies newline-delimited JSON-RPC between a client and a server.
+// JSON-RPC error codes Neuron uses when it is the one refusing a call.
+const (
+	// CodeServerUnavailable means the server process is gone.
+	CodeServerUnavailable = -32000
+	// CodePolicyDenied means a policy refused the tool.
+	CodePolicyDenied = -32001
+	// CodePolicyRateLimited means a policy's rate limit is spent.
+	CodePolicyRateLimited = -32002
+)
+
+// BlockedError refuses a request. The proxy answers the client with Code and
+// Message, and records the call as failed.
+type BlockedError struct {
+	Code    int
+	Message string
+}
+
+// Error implements error.
+func (e *BlockedError) Error() string { return e.Message }
+
+// Guard can refuse a client request before it reaches the server.
+type Guard interface {
+	// Check is called for requests that carry an id. Returning nil allows the
+	// request; returning a *BlockedError refuses it with that code and message.
+	Check(method string, params json.RawMessage) error
+}
+
+// GuardFunc adapts a plain function to Guard.
+type GuardFunc func(method string, params json.RawMessage) error
+
+// Check implements Guard.
+func (f GuardFunc) Check(method string, params json.RawMessage) error {
+	return f(method, params)
+}
+
+// NewSession starts a session for one server. A nil Recorder disables recording.
+func NewSession(server string, clientOut io.Writer, rec Recorder) *Session {
+	return &Session{server: server, rec: rec, out: clientOut, pending: map[string]*pendingCall{}}
+}
+
+// ServeRequests forwards client messages to the target until the source ends.
+// A guard, when installed, may refuse a request before it is forwarded.
+func (s *Session) ServeRequests(src LineSource, target ServerTarget) {
+	for {
+		line, ok := src.Next()
+		if !ok {
+			return
+		}
+		payload := stripNewline(line)
+
+		if blocked := s.refusal(payload); blocked != nil {
+			s.reject(payload, blocked)
+			continue
+		}
+
+		s.observeRequest(payload)
+		if !target.Write(line) {
+			return
+		}
+	}
+}
+
+// SetGuard installs a guard that can refuse client requests. A nil guard allows
+// everything, which is the default.
+func (s *Session) SetGuard(g Guard) { s.guard = g }
+
+// refusal consults the guard. Notifications are never refused: they have no id,
+// so there is no way to tell the client why.
+func (s *Session) refusal(line []byte) *BlockedError {
+	if s.guard == nil {
+		return nil
+	}
+	var m rpcMessage
+	if err := json.Unmarshal(line, &m); err != nil {
+		return nil
+	}
+	if idKey(m.ID) == "" {
+		return nil
+	}
+
+	err := s.guard.Check(m.Method, m.Params)
+	if err == nil {
+		return nil
+	}
+	var blocked *BlockedError
+	if errors.As(err, &blocked) {
+		return blocked
+	}
+	return &BlockedError{Code: CodePolicyDenied, Message: err.Error()}
+}
+
+// reject answers a refused request without forwarding it, and records it so the
+// dashboard shows policy blocks rather than silence.
+func (s *Session) reject(line []byte, blocked *BlockedError) {
+	var m rpcMessage
+	if err := json.Unmarshal(line, &m); err != nil {
+		return
+	}
+	key := idKey(m.ID)
+	if key == "" {
+		return
+	}
+
+	pc := describeRequest(m)
+	pc.start = time.Now()
+	if s.rec != nil {
+		s.rec.Record(Call{
+			Time:     pc.start,
+			Server:   s.server,
+			Method:   pc.method,
+			Tool:     pc.tool,
+			Args:     pc.args,
+			Status:   "error",
+			Error:    blocked.Message,
+			TokensIn: pc.tokensIn,
+		})
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      json.RawMessage(key),
+		"error":   map[string]any{"code": blocked.Code, "message": blocked.Message},
+	})
+	if err != nil {
+		return
+	}
+	_ = s.writeClient(append(payload, '\n'))
+}
+
+// ServeResponses forwards one server process's responses to the client until
+// that process closes its stdout, which is what ends a generation.
+func (s *Session) ServeResponses(serverOut io.Reader) error {
+	scanner := newScanner(serverOut)
+	for scanner.Scan() {
+		raw := scanner.Bytes()
+		s.observeResponse(stripNewline(raw))
+		if err := s.writeClient(raw); err != nil {
+			return err
+		}
+	}
+	return scanner.Err()
+}
+
+// FailPending answers every in-flight request with a JSON-RPC error, so a crash
+// or a restart never leaves the client waiting forever. Each abandoned call is
+// recorded as an error, so the dashboard shows what the crash cost.
+func (s *Session) FailPending(message string) int {
+	s.mu.Lock()
+	stale := s.pending
+	s.pending = map[string]*pendingCall{}
+	s.mu.Unlock()
+
+	now := time.Now()
+	failed := 0
+	for key, pc := range stale {
+		if s.rec != nil {
+			s.rec.Record(Call{
+				Time:       pc.start,
+				Server:     s.server,
+				Method:     pc.method,
+				Tool:       pc.tool,
+				Args:       pc.args,
+				Status:     "error",
+				Error:      message,
+				DurationMs: now.Sub(pc.start).Milliseconds(),
+				TokensIn:   pc.tokensIn,
+			})
+		}
+
+		payload, err := json.Marshal(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      json.RawMessage(key),
+			"error":   map[string]any{"code": CodeServerUnavailable, "message": message},
+		})
+		if err != nil {
+			continue
+		}
+		if err := s.writeClient(append(payload, '\n')); err != nil {
+			return failed
+		}
+		failed++
+	}
+	return failed
+}
+
+func (s *Session) writeClient(line []byte) error {
+	if s.out == nil {
+		return nil
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	_, err := s.out.Write(line)
+	return err
+}
+
+// Deliver records one server-to-client message and forwards it verbatim. Transports
+// that do not read a single stream — HTTP requests, SSE events — use it to feed
+// responses into the same recording and write path as a child process's stdout.
+func (s *Session) Deliver(line []byte) error {
+	payload := stripNewline(line)
+	s.observeResponse(payload)
+	return s.writeClient(append(payload, '\n'))
+}
+
+// Pump proxies newline-delimited JSON-RPC between a client and a single server
+// process.
 //
 // clientIn/clientOut are the client's view (usually os.Stdin/os.Stdout).
 // serverIn/serverOut are the server process's stdin/stdout. Bytes are forwarded
 // untouched in both directions. Pump returns when the server side closes or the
 // write to the client fails, which is when the MCP session is over.
+//
+// Supervision across restarts lives in pkg/mcp, on top of Session.
 func Pump(
 	server string,
 	clientIn io.Reader,
@@ -95,54 +355,17 @@ func Pump(
 	serverOut io.Reader,
 	rec Recorder,
 ) error {
-	if clientIn == nil {
-		clientIn = strings.NewReader("")
-	}
-	p := &pump{server: server, rec: rec, pending: map[string]*pendingCall{}}
+	sess := NewSession(server, clientOut, rec)
 
 	// The request direction is not waited on: a real client holds stdin open
 	// for the life of the session, and we must return as soon as the server
 	// closes rather than blocking on that read forever.
-	go p.forwardRequests(clientIn, serverIn)
+	go func() {
+		sess.ServeRequests(NewReaderSource(clientIn), WriteCloserTarget{W: serverIn})
+		_ = serverIn.Close()
+	}()
 
-	return p.forwardResponses(serverOut, clientOut)
-}
-
-func (p *pump) forwardRequests(in io.Reader, out io.WriteCloser) {
-	defer out.Close()
-
-	scanner := newScanner(in)
-	w := bufio.NewWriter(out)
-	for scanner.Scan() {
-		raw := scanner.Bytes()
-		p.observeRequest(stripNewline(raw))
-
-		// Write the bytes exactly as received, terminator included.
-		if _, err := w.Write(raw); err != nil {
-			return
-		}
-		if err := w.Flush(); err != nil {
-			return
-		}
-	}
-}
-
-func (p *pump) forwardResponses(in io.Reader, out io.Writer) error {
-	scanner := newScanner(in)
-	w := bufio.NewWriter(out)
-	for scanner.Scan() {
-		raw := scanner.Bytes()
-		p.observeResponse(stripNewline(raw))
-
-		// Write the bytes exactly as received, terminator included.
-		if _, err := w.Write(raw); err != nil {
-			return err
-		}
-		if err := w.Flush(); err != nil {
-			return err
-		}
-	}
-	return scanner.Err()
+	return sess.ServeResponses(serverOut)
 }
 
 func newScanner(r io.Reader) *bufio.Scanner {
@@ -172,7 +395,7 @@ func stripNewline(b []byte) []byte {
 	return b
 }
 
-func (p *pump) observeRequest(line []byte) {
+func (s *Session) observeRequest(line []byte) {
 	var m rpcMessage
 	if err := json.Unmarshal(line, &m); err != nil || m.Method == "" {
 		return
@@ -183,6 +406,14 @@ func (p *pump) observeRequest(line []byte) {
 		return
 	}
 
+	s.mu.Lock()
+	s.pending[key] = describeRequest(m)
+	s.mu.Unlock()
+}
+
+// describeRequest captures what the session needs to know about a request: how
+// to record it and, if it is refused, what to say.
+func describeRequest(m rpcMessage) *pendingCall {
 	pc := &pendingCall{
 		method:   m.Method,
 		args:     redactJSON(m.Params),
@@ -196,13 +427,10 @@ func (p *pump) observeRequest(line []byte) {
 		_ = json.Unmarshal(m.Params, &params)
 		pc.tool = params.Name
 	}
-
-	p.mu.Lock()
-	p.pending[key] = pc
-	p.mu.Unlock()
+	return pc
 }
 
-func (p *pump) observeResponse(line []byte) {
+func (s *Session) observeResponse(line []byte) {
 	var m rpcMessage
 	if err := json.Unmarshal(line, &m); err != nil {
 		return
@@ -212,19 +440,19 @@ func (p *pump) observeResponse(line []byte) {
 		return
 	}
 
-	p.mu.Lock()
-	pc, ok := p.pending[key]
+	s.mu.Lock()
+	pc, ok := s.pending[key]
 	if ok {
-		delete(p.pending, key)
+		delete(s.pending, key)
 	}
-	p.mu.Unlock()
+	s.mu.Unlock()
 	if !ok {
 		return
 	}
 
 	call := Call{
 		Time:       pc.start,
-		Server:     p.server,
+		Server:     s.server,
 		Method:     pc.method,
 		Tool:       pc.tool,
 		Args:       pc.args,
@@ -240,8 +468,8 @@ func (p *pump) observeResponse(line []byte) {
 		call.TokensOut = estimateTokens(m.Result)
 	}
 
-	if p.rec != nil {
-		p.rec.Record(call)
+	if s.rec != nil {
+		s.rec.Record(call)
 	}
 }
 

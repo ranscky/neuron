@@ -6,7 +6,13 @@
 //	PORT                   listen port (default 8080)
 //	NEURON_CLOUD_DATA      path to the data file (default ./data/cloud.json)
 //	STRIPE_WEBHOOK_SECRET  signing secret; unset disables billing
+//	STRIPE_SECRET_KEY      API key used to create Checkout Sessions; unset disables checkout
+//	STRIPE_PRICE_ID        recurring price a subscription buys
+//	NEURON_PUBLIC_URL      public origin for post-checkout redirects (default: request origin)
 //	NEURON_REQUIRE_PRO     "false" disables the paid-plan gate on sync
+//	NEURON_OIDC_ISSUER / NEURON_OIDC_CLIENT_ID / NEURON_OIDC_CLIENT_SECRET
+//	                       enable provider-backed device approval
+//	NEURON_OIDC_REDIRECT_URL overrides the callback URL (default: <public base>/v1/auth/oidc/callback)
 package main
 
 import (
@@ -32,6 +38,15 @@ func main() {
 	}
 
 	server := cloud.NewServer(store, os.Getenv("STRIPE_WEBHOOK_SECRET"), logger)
+	server.StripeSecretKey = os.Getenv("STRIPE_SECRET_KEY")
+	server.StripePriceID = os.Getenv("STRIPE_PRICE_ID")
+	server.PublicBaseURL = os.Getenv("NEURON_PUBLIC_URL")
+	server.OIDC = cloud.OIDCConfig{
+		Issuer:       os.Getenv("NEURON_OIDC_ISSUER"),
+		ClientID:     os.Getenv("NEURON_OIDC_CLIENT_ID"),
+		ClientSecret: os.Getenv("NEURON_OIDC_CLIENT_SECRET"),
+		RedirectURL:  os.Getenv("NEURON_OIDC_REDIRECT_URL"),
+	}
 	if os.Getenv("NEURON_REQUIRE_PRO") == "false" {
 		server.RequirePro = false
 	}

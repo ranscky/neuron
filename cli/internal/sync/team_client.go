@@ -86,3 +86,37 @@ func (c *Client) PushTeamBlob(ctx context.Context, teamID string, blob *RemoteBl
 func teamPath(teamID, name string) string {
 	return "/v1/teams/" + url.PathEscape(teamID) + "/blobs/" + url.PathEscape(name)
 }
+
+// TeamKey is one member device's record. WrappedKey is only present for the
+// caller's own devices; HasKey says whether any wrapping exists for that device.
+type TeamKey struct {
+	AccountID  string `json:"account_id"`
+	PublicKey  string `json:"public_key"`
+	WrappedKey string `json:"wrapped_key,omitempty"`
+	HasKey     bool   `json:"has_key"`
+}
+
+// PutTeamKey registers this device's public key and, when supplied, the team key
+// wrapped for it.
+func (c *Client) PutTeamKey(ctx context.Context, teamID, publicKey, wrappedKey string) error {
+	payload := map[string]string{"public_key": publicKey, "wrapped_key": wrappedKey}
+	return c.do(ctx, http.MethodPut, "/v1/teams/"+url.PathEscape(teamID)+"/keys", payload, nil)
+}
+
+// GrantTeamKey wraps the team key for another member's device.
+func (c *Client) GrantTeamKey(ctx context.Context, teamID, publicKey, wrappedKey string, force bool) error {
+	payload := map[string]any{"wrapped_key": wrappedKey, "force": force}
+	path := "/v1/teams/" + url.PathEscape(teamID) + "/keys/" + url.PathEscape(publicKey)
+	return c.do(ctx, http.MethodPut, path, payload, nil)
+}
+
+// TeamKeys lists every member device for a team.
+func (c *Client) TeamKeys(ctx context.Context, teamID string) ([]TeamKey, error) {
+	var out struct {
+		Keys []TeamKey `json:"keys"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/v1/teams/"+url.PathEscape(teamID)+"/keys", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Keys, nil
+}

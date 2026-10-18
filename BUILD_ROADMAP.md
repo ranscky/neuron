@@ -54,7 +54,7 @@ lockfile, executor, workflow runner.
 | `python.go` injects *all* provider keys into *every* package | Secret leak |
 | Runtime sets `NEURON_PROVIDER`, `agents/researcher` reads `NEURON_MODEL_PROVIDER` | Broken provider selection |
 | Venv dir `tools_web-search` vs path `venv/tools/web-search` | Broken cross-package calls |
-| Registry `/v1/publish` has no auth; `name`/`version` unsanitized into `filepath.Join` | Path traversal |
+| Registry `/v1/publish` has no auth; `name`/`version` unsanitized into `filepath.Join` — **both fixed 2026-10-18** | Path traversal |
 | 1,188-line `main.go`, commands inlined | Velocity risk |
 
 ---
@@ -69,8 +69,9 @@ lockfile, executor, workflow runner.
       *Landed in parallel via the merged `phase-0/repo-hygiene` PR, whose `.gitignore` is more
       complete than the draft here.*
 - [x] `LICENSE` settled **2026-09-28**: relicensed to **MIT** to match the README (human decision).
-- [ ] CI workflow written but **not pushed** — the GitHub token lacks `workflow` scope, and the human
-      chose to drop it for now. Tests are run locally (`go vet` + `go test`).
+- [x] CI workflow written **and live 2026-09-28**. The first push was blocked by a token without
+      `workflow` scope; it landed with the docs/Pages work and is green (run 36406070988). The
+      release workflow added 2026-10-18 reuses the same build/vet/`-race` checks.
 - [x] Delete `cli/pkg/runtime/sandbox.go` (dead) and drop the "sandboxed runtime" claim from the README and CLI help.
 - [x] Stop injecting every provider key into every package — provider credentials are now gated on declared `env:` permissions.
 - [x] Add `neuron version` (and `--version`).
@@ -214,18 +215,34 @@ record/recent/stats/rotation behaviour, and the dashboard endpoints.
 
 **Deviations, recorded honestly:**
 
-- **PBKDF2, not Argon2id.** `golang.org/x/crypto` could not be installed — the module cache is
-  read-only in this environment — so Go's stdlib `crypto/pbkdf2` is used at 600k iterations
-  (OWASP's recommendation). Argon2id is memory-hard and strictly better. The envelope is versioned
-  and self-describing, so this is a clean migration once the dependency can be added.
-- **No Stripe Checkout creation.** Webhook verification and plan transitions are implemented and
-  tested; creating a Checkout Session needs a Stripe secret key, which is the human's to supply.
-- **No browser approval page.** The device flow is real, but approval runs through
-  `neuron login --approve <code>` (or `--auto-approve` when self-hosting) instead of a web UI.
-- **Team sharing uses a shared passphrase, not per-member key wrapping.** It is genuinely
-  end-to-end encrypted and the service learns nothing, but removing a member means rotating the
-  team passphrase. Wrapping the team key to each member's public key (`crypto/ecdh` is in the
-  stdlib) is the correct upgrade and is scoped for Phase 5.
+- **~~PBKDF2, not Argon2id~~ — resolved 2026-10-18.** The blocker is gone:
+  `golang.org/x/crypto` installs fine now, so new payloads are sealed with Argon2id at RFC
+  9106's second recommended configuration (t=3, m=64 MiB, p=4) as envelope **v2**. v1
+  PBKDF2 envelopes remain readable forever — `OpenWithPassphrase` dispatches on the envelope's
+  own version — so no synced account is stranded by the upgrade. Derivation parameters travel
+  inside the envelope and are therefore attacker-controlled, so they are capped (8 MiB–1 GiB
+  memory, t ≤ 16, p ≤ 32, PBKDF2 iterations ≤ 10M): a hostile blob is an error, not an OOM.
+  Tests cover the v1 read path, the v1 wire format staying byte-identical, cross-KDF rejection
+  and the parameter caps.
+- **~~No Stripe Checkout creation~~ — code done 2026-10-18; going live still needs a key.**
+  `POST /v1/billing/checkout` mints a subscription Checkout Session and `neuron upgrade` prints the
+  URL, so Pro is now purchasable end to end in code. The plan still flips only from a
+  signature-verified webhook, and an account already on Pro gets 409 rather than a second
+  subscription. What remains is the human's: create the price in Stripe and set `STRIPE_SECRET_KEY`
+  + `STRIPE_PRICE_ID` on the deployed service.
+- **~~No browser approval page~~ — done 2026-10-18.** The service now serves a real page at the
+  `/activate` URI it advertises: paste the code (plus the account id on the very first device), or
+  open a one-time approval link. Links are minted by a signed-in machine via
+  `POST /v1/device/approvals` (`neuron login --approve <code> --link`), are single-use, expire with
+  the device code, and carry the account — so a browser never handles a session token or an account
+  id. `POST /v1/device/approve` now also accepts a session instead of an account id. The terminal
+  paths (`--approve`, `--auto-approve`) still work.
+- **~~Team sharing uses a shared passphrase~~ — wrapped per member device 2026-10-18.** Each device
+  has an X25519 keypair; the random team key is sealed to each device's public key (ephemeral ECDH →
+  HKDF-SHA256 → AES-256-GCM) and the service stores only sealed blobs. `team create`/`join`/`sync`
+  use this by default; any member grants the key to a newcomer on their next sync, so nobody shares
+  a secret. `neuron team rotate` re-wraps a fresh key for every device. Rotation does not re-encrypt
+  blobs shared earlier, and there is no `team remove` yet — both stated in `docs/sync.md`.
 
 **Acceptance — NOT MET, and not reachable from here.** "1,000 free users, first paying customer" is
 a go-to-market outcome, not a code outcome. The code is ready for it; the launch is the human's.
@@ -294,7 +311,67 @@ Not a roadmap phase; recorded so the state is unambiguous.
       `store.MigrateLegacyPackages`, none of which exist on the branch, and its CLI registry-client
       API conflicts with the shipped one. Registry auth (API keys, org-scoped storage) will be
       **rebuilt from scratch** as its own scoped effort rather than resurrected from this branch. The
-      branch is left in place on the remote, untouched; it may be deleted.
+      branch was **deleted from the remote on 2026-10-18** (cleanup); it pointed at `f816ef63` with
+      `f079f7bf` beneath it, so it can be restored with
+      `git push origin f816ef63:refs/heads/phase-1/registry-auth` if it is ever wanted.
+
+---
+
+## 2026-10-18 — Distribution, crypto, and the purchase path
+
+- [x] **Release pipeline.** `.github/workflows/release.yml` builds `neuron` for linux/darwin/windows
+      on amd64+arm64 (CGO-free), gates the release on the same build/vet/`-race` test checks as CI,
+      publishes checksummed archives, and attaches a rendered Homebrew formula (`neuron.rb`) to the
+      release. Cut one with `git tag -a v0.1.0 -m "neuron 0.1.0" && git push origin v0.1.0`.
+      All six targets were cross-built and the workflow's shell steps (version resolution,
+      packaging, checksums, formula rendering) were executed locally against the artifacts.
+- [x] **A real installer.** `scripts/install.sh` now downloads the release binary and verifies it
+      against `checksums.txt` instead of requiring a Go toolchain. It supports `--version`,
+      `--prefix`, `--source`, `--dry-run` and `--no-verify`, and fails closed when a release has no
+      checksums. The README no longer advertises the dead `get.neuron.ai` URL.
+- [x] **Homebrew tap, prepared.** `scripts/publish-tap.sh` copies a release's rendered formula into
+      `ranscky/homebrew-neuron`, creating the repo on first run. Deliberately not wired into CI:
+      creating a repository should stay a human decision.
+- [x] **Argon2id (envelope v2)** — see the deviation note under Phase 3; v1 blobs still decrypt.
+- [x] **Checkout** — `POST /v1/billing/checkout` + `neuron upgrade`; see the deviation note.
+- [x] **Registry publishing is now authenticated and org-scoped.** `/v1/publish` requires a bearer
+      API key; each key belongs to one org, and an org may only publish under its own prefix
+      (`acme/web-search`). Keys are stored as SHA-256 hashes and shown once, at creation. Org
+      creation is gated by `NEURON_REGISTRY_ADMIN_TOKEN` and answers 503 when unset, so an
+      unconfigured instance cannot be claimed by whoever reaches it first. `POST /v1/keys` mints
+      more keys (CI, rotation), `neuron publish --token` / `NEURON_REGISTRY_TOKEN` supplies one, and
+      reads stay public. Rebuilt from scratch — the abandoned `phase-1/registry-auth` branch was
+      never reused. Not yet covered: key revocation.
+- [x] **Package names and versions are validated before they become paths.** The Phase 0 audit
+      flagged `name`/`version` going unsanitised into `filepath.Join`; publish now accepts only
+      lowercase `<org>/<package>` and a plain version, `..` is refused anywhere, and `FileStore.Save`
+      re-checks both so a caller cannot bypass the HTTP layer. Tests cover traversal attempts both
+      through the handler and straight at the store.
+- [x] **Sync tests now run on Windows.** `os.UserHomeDir` reads `USERPROFILE`, not `HOME`, so the
+      old `t.Setenv("HOME", …)` isolation silently did nothing there and seven engine/team/auth
+      tests failed (and leaked state between each other). Tests now isolate both variables, and the
+      POSIX-mode assertion skips on Windows.
+
+**Section D (Phase 5 groundwork), also 2026-10-18:** local policy enforcement (`docs/policy.md`),
+audit export, per-device team key wrapping with rotation, OIDC-backed device approval, and the remote
+(HTTP/SSE) MCP transport. Each item's roadmap entry records what it does *not* cover.
+
+**Known gaps after this session:** no release or tag has been pushed yet, the tap repo does not
+exist yet, and the demo video is still missing. (The Windows `pkg/installer.TestInstaller` failure
+recorded in the previous entry was fixed on 2026-10-18 — see below.)
+From section D specifically: policy is local only (not served from `cloud/`), team rotation does not
+re-encrypt existing blobs and there is no `team remove`, remote servers are proxied but not hosted,
+remote-endpoint credentials are not injected, and registry API keys have no revocation endpoint.
+
+**2026-10-18 — Python environments fixed (the `TestInstaller` failure).** Two real bugs, not an
+environment quirk: venv paths were POSIX-only (`bin/python3`, `bin/pip`), so on Windows a good
+environment was never found and `python -m venv` was re-run into the half-built one forever — the
+"Unable to copy … venvlauncher.exe" error; and the test set only `HOME`, which Windows ignores
+(`os.UserHomeDir` reads `USERPROFILE`), so it asserted against a directory the installer never wrote
+to. Environments are now located per platform, rebuilt with `--clear` when the interpreter inside
+does not run, and skip pip entirely when a package has no `requirements.txt`. Interpreter selection
+tries `NEURON_PYTHON`, `python`, `py -3`, `python3` on Windows and `python3`, `python` elsewhere.
+`go test ./...` is green on Windows for the first time.
 
 ---
 
@@ -315,10 +392,28 @@ Not a roadmap phase; recorded so the state is unambiguous.
 
 **Goal:** the enterprise on-ramp, built on the same proxy.
 
-- [ ] Policy engine: per-server allow/deny, scopes, rate limits.
-- [ ] Audit log export.
-- [ ] Remote / hosted MCP servers.
-- [ ] SSO / OIDC scaffolding.
+- [x] **Policy engine: per-server allow/deny, scopes, rate limits** — local enforcement shipped
+      2026-10-18 (`docs/policy.md`). The proxy refuses a `tools/call` before forwarding it, answers
+      with `-32001`/`-32002`, and records the block in the history; `neuron policy show|check`
+      explains decisions. Still to come for the gateway: the same policy served from `cloud/` so it
+      applies to a team, not just one machine.
+- [x] **Audit log export** — `neuron audit export` shipped 2026-10-18. JSONL or CSV, filtered by
+      `--since`/`--until` (duration or RFC3339), `--server`, `--tool` and `--status`, to stdout or a
+      file with `0600` permissions. It exports exactly what was recorded (already redacted and
+      truncated), so policy blocks and crash-abandoned calls appear as reasoned `error` rows.
+      Forwarding to a SIEM or an HTTP sink is still to come.
+- [x] **Remote MCP servers (client side)** — shipped 2026-10-18. A server registered with `--url` is
+      reached over HTTP through the same session as a local one, so policy and recording apply
+      unchanged: streamable HTTP (POST, JSON or SSE response, `Mcp-Session-Id` echoed) and the legacy
+      SSE transport (GET stream announces a POST endpoint). Transport failures answer the request with
+      `-32000` rather than hanging. **Hosting** a remote server on `cloud/` is still to come, as is
+      injecting credentials for a remote endpoint.
+- [x] **SSO / OIDC scaffolding** — shipped 2026-10-18. `/v1/auth/oidc/start` and `/v1/auth/oidc/callback`
+      implement authorization-code + PKCE (S256) against any configured issuer, verify the ID token's
+      RS256 signature against the provider's JWKS, check issuer/audience/expiry/nonce, link by verified
+      email, and approve the waiting device code; the `/activate` page offers it. RS256 and
+      `client_secret_post` are the documented limits. Remaining for a gateway: group/role claims mapped
+      to policy, and provider-initiated logout.
 
 **Acceptance:** a design partner can enforce a policy across a team.
 

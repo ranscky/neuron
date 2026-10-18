@@ -16,6 +16,7 @@ import (
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/fatih/color"
 	"github.com/ranscky/neuron/internal/config"
+	"github.com/ranscky/neuron/internal/policy"
 	"github.com/ranscky/neuron/internal/proxy"
 	"github.com/ranscky/neuron/internal/sync"
 	"github.com/ranscky/neuron/pkg/executor"
@@ -151,11 +152,15 @@ var (
 	}
 
 	// publishCmd represents the publish command
-	publishCmd = &cobra.Command{
+	publishToken string
+	publishCmd   = &cobra.Command{
 		Use:   "publish",
 		Short: "Publish current directory as a Neuron package",
-		Long:  `Validate neuron.json via ParseManifest, tar.gz current dir via PublishPackage, upload via RegistryClient.Publish`,
-		Args:  cobra.NoArgs,
+		Long: `Validate neuron.json via ParseManifest, tar.gz current dir via PublishPackage, upload via RegistryClient.Publish.
+
+Publishing is org-scoped: the package name must be <org>/<package>, and the org
+comes from the API key. Pass --token or set NEURON_REGISTRY_TOKEN.`,
+		Args: cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			ui.Info("Validating neuron.json...")
 
@@ -170,8 +175,12 @@ var (
 			s := ui.NewSpinner("Creating package archive...")
 			ui.StartSpinner(s)
 
-			// Publish package
-			err = registry.PublishPackage(registryClient)
+			// Publish package. --token wins over NEURON_REGISTRY_TOKEN.
+			client := registryClient
+			if publishToken != "" {
+				client = registryClient.WithToken(publishToken)
+			}
+			err = registry.PublishPackage(client)
 			if err != nil {
 				ui.FailSpinner(s, fmt.Sprintf("Failed to publish package: %v", err))
 				os.Exit(1)
@@ -983,6 +992,7 @@ func init() {
 
 	// Add all commands
 	rootCmd.AddCommand(installCmd)
+	publishCmd.Flags().StringVar(&publishToken, "token", "", "registry API key (or set NEURON_REGISTRY_TOKEN)")
 	rootCmd.AddCommand(publishCmd)
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(searchCmd)
@@ -1278,6 +1288,7 @@ func init() {
 
 	// Hidden launcher. Clients invoke this for every proxied server, so that
 	// secrets never appear in a client config and every call is recorded.
+	var mcpRunNoRestart bool
 	mcpRunCmd := &cobra.Command{
 		Use:    "run <name>",
 		Short:  "Launch a managed server with its secrets resolved",
@@ -1297,13 +1308,29 @@ func init() {
 				rec = hist
 			}
 
+			restart := mcp.DefaultRestartPolicy
+			if mcpRunNoRestart {
+				restart = mcp.NoRestart
+			}
+
+			// The policy is enforced here, before a call reaches the server.
+			// A missing policy file means "allow everything".
+			guard, err := loadPolicyGuard(args[0])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "neuron: %v\n", err)
+				os.Exit(1)
+			}
+
 			secretStore := secrets.NewStore()
-			if err := mcp.RunServer(store, args[0], secretStore.Get, rec, os.Stdin, os.Stdout, os.Stderr); err != nil {
+			opts := mcp.Options{Restart: restart, Guard: guard}
+			if err := mcp.RunServerWithOptions(store, args[0], secretStore.Get, rec, os.Stdin, os.Stdout, os.Stderr, opts); err != nil {
 				fmt.Fprintf(os.Stderr, "neuron: %v\n", err)
 				os.Exit(1)
 			}
 		},
 	}
+	mcpRunCmd.Flags().BoolVar(&mcpRunNoRestart, "no-restart", false,
+		"exit when the server dies instead of restarting it")
 
 	setProxy := func(name string, enabled bool) {
 		store, err := mcp.NewStore()
@@ -1359,6 +1386,68 @@ func init() {
 
 	// Add mcp commands
 	mcpCmd.AddCommand(mcpAddCmd, mcpRemoveCmd, mcpListCmd, mcpSyncCmd, mcpDoctorCmd, mcpWrapCmd, mcpUnwrapCmd, mcpRunCmd)
+	// --- policy -----------------------------------------------------------
+
+	policyCmd := &cobra.Command{
+		Use:   "policy",
+		Short: "Inspect the tool-call policy",
+		Long: "A policy file (default ~/.neuron/policy.json, or NEURON_POLICY) decides which tool " +
+			"calls may reach a server. Without one, every call is allowed.",
+	}
+	policyShowCmd := &cobra.Command{
+		Use:   "show",
+		Short: "Print the loaded policy",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			engine, err := policy.Load("")
+			switch {
+			case errors.Is(err, policy.ErrNoPolicy):
+				ui.Info("No policy file at " + policy.DefaultPath() + " (set NEURON_POLICY to use another path).")
+				ui.Info("Every tool call is allowed.")
+				return
+			case err != nil:
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+
+			raw, err := json.MarshalIndent(engine.Policy(), "", "  ")
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+			fmt.Println(engine.Path())
+			fmt.Println(string(raw))
+		},
+	}
+	policyCheckCmd := &cobra.Command{
+		Use:   "check <server> <tool>",
+		Short: "Explain whether a tool call is allowed",
+		Long: "Evaluates the policy without consuming rate-limit quota, so it is safe to run while " +
+			"a session is live. Exits 1 when the call would be denied.",
+		Args: cobra.ExactArgs(2),
+		Run: func(cmd *cobra.Command, args []string) {
+			engine, err := policy.Load("")
+			switch {
+			case errors.Is(err, policy.ErrNoPolicy):
+				ui.Success("allow: no policy file, every tool call is allowed")
+				return
+			case err != nil:
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+
+			verdict := engine.Decide(args[0], args[1])
+			if verdict.Allowed {
+				ui.Success("allow: " + verdict.Reason)
+				return
+			}
+			ui.Error("deny: " + verdict.Reason)
+			os.Exit(1)
+		},
+	}
+	policyCmd.AddCommand(policyShowCmd, policyCheckCmd)
+	rootCmd.AddCommand(policyCmd)
+
 	rootCmd.AddCommand(mcpCmd)
 
 	// ui — the local MCP activity dashboard.
@@ -1392,6 +1481,7 @@ func init() {
 		loginAccount     string
 		loginApprove     string
 		loginAutoApprove bool
+		loginLink        bool
 	)
 
 	loginCmd := &cobra.Command{
@@ -1405,6 +1495,26 @@ func init() {
 
 			// Approve-only mode, run from another terminal or another machine.
 			if loginApprove != "" {
+				// --link hands approval to a browser instead of approving here.
+				// Minting the link needs a session: that is what proves the
+				// account, so the browser never handles a token or account id.
+				if loginLink {
+					client, _, _, err := requireSession()
+					if err != nil {
+						ui.Error(err.Error())
+						ui.Info("Approval links need a session on this machine. Without one, approve with --account and --server.")
+						os.Exit(1)
+					}
+					link, err := client.CreateApprovalLink(ctx, strings.ToUpper(loginApprove))
+					if err != nil {
+						ui.Error(fmt.Sprintf("Could not create an approval link: %v", err))
+						os.Exit(1)
+					}
+					ui.Success("Open this link in any browser to approve the device:")
+					fmt.Println(link.URL)
+					return
+				}
+
 				auth, authErr := sync.LoadAuth()
 				accountID := loginAccount
 				if accountID == "" && authErr == nil {
@@ -1471,8 +1581,11 @@ func init() {
 				}
 			} else {
 				fmt.Printf("User code: %s\n", color.CyanString(code.UserCode))
-				ui.Step("Approve this device from another terminal with:")
+				fmt.Printf("Approve it at %s\n", sync.ActivateURL(serverURL, code.VerificationURI))
+				ui.Step("Or approve from another terminal with:")
 				fmt.Printf("  neuron login --approve %s --account %s --server %s\n", code.UserCode, accountID, serverURL)
+				ui.Step("Or, from a machine that is already signed in, get a browser link with:")
+				fmt.Printf("  neuron login --approve %s --link\n", code.UserCode)
 			}
 
 			deadline := time.Now().Add(10 * time.Minute)
@@ -1536,6 +1649,7 @@ func init() {
 	loginCmd.Flags().StringVar(&loginAccount, "account", "", "existing account id to sign in to")
 	loginCmd.Flags().StringVar(&loginApprove, "approve", "", "approve a pending user code instead of signing in")
 	loginCmd.Flags().BoolVar(&loginAutoApprove, "auto-approve", false, "approve this device automatically (self-hosted convenience)")
+	loginCmd.Flags().BoolVar(&loginLink, "link", false, "with --approve: print a browser link instead of approving here (needs a session)")
 
 	logoutCmd := &cobra.Command{
 		Use:   "logout",
@@ -1562,6 +1676,38 @@ func init() {
 				os.Exit(1)
 			}
 			ui.Success("Signed out")
+		},
+	}
+
+	upgradeCmd := &cobra.Command{
+		Use:   "upgrade",
+		Short: "Subscribe to the Pro plan",
+		Long: "Start a Stripe Checkout session for the paid plan. Encrypted sync and team " +
+			"sharing need it; everything local stays free. The plan changes only after Stripe " +
+			"confirms the payment to the sync service.",
+		Args: cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			client, _, _, err := requireSession()
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+
+			checkout, err := client.CreateCheckout(cmd.Context())
+			switch {
+			case errors.Is(err, sync.ErrAlreadySubscribed):
+				ui.Info("This account is already on the Pro plan.")
+				return
+			case errors.Is(err, sync.ErrUnauthorized):
+				ui.Error("Your session has expired. Run `neuron login` again.")
+				os.Exit(1)
+			case err != nil:
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+
+			ui.Success("Open this URL to complete the subscription:")
+			fmt.Println(checkout.URL)
 		},
 	}
 
@@ -1605,7 +1751,7 @@ func init() {
 				ui.Error(err.Error())
 				os.Exit(1)
 			}
-			key, err := sync.DeriveKey(passphrase, salt, 0)
+			key, err := sync.NewKey(passphrase, salt)
 			if err != nil {
 				ui.Error(fmt.Sprintf("Could not derive the encryption key: %v", err))
 				os.Exit(1)
@@ -1660,7 +1806,7 @@ func init() {
 	}
 	syncCmd.Flags().StringVar(&syncPassphrase, "passphrase", "", "sync passphrase (or set NEURON_PASSPHRASE)")
 
-	rootCmd.AddCommand(loginCmd, logoutCmd, syncCmd)
+	rootCmd.AddCommand(loginCmd, logoutCmd, syncCmd, upgradeCmd)
 
 	// --- teams ------------------------------------------------------------
 
@@ -1676,7 +1822,9 @@ func init() {
 	teamCreateCmd := &cobra.Command{
 		Use:   "create <name>",
 		Short: "Create a team and print its invite code",
-		Args:  cobra.ExactArgs(1),
+		Long: "Create a team whose key is wrapped for each member device. Pass --passphrase to create a " +
+			"legacy team whose key is derived from a shared passphrase instead.",
+		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			ctx := cmd.Context()
 			client, _, secretStore, err := requireSession()
@@ -1685,43 +1833,54 @@ func init() {
 				os.Exit(1)
 			}
 
-			// Ask for the passphrase before creating anything, so a mistyped
-			// team never exists without a key the creator knows.
-			passphrase, err := resolveTeamPassphrase(teamPassphraseFlag)
-			if err != nil {
-				ui.Error(err.Error())
-				os.Exit(1)
-			}
-
-			salt, err := sync.NewSalt()
-			if err != nil {
-				ui.Error(fmt.Sprintf("Could not generate a team salt: %v", err))
-				os.Exit(1)
-			}
-
-			team, err := client.CreateTeam(ctx, args[0], salt)
-			if err != nil {
-				ui.Error(fmt.Sprintf("Could not create the team: %v", err))
-				os.Exit(1)
-			}
-
 			teams, err := sync.LoadTeams()
 			if err != nil {
 				ui.Error(err.Error())
 				os.Exit(1)
 			}
-			ref := sync.TeamRef{TeamID: team.ID, Name: team.Name, Salt: team.Salt}
-			if err := teams.Add(ref); err != nil {
-				ui.Error(fmt.Sprintf("Could not save the team locally: %v", err))
-				os.Exit(1)
-			}
-			if err := secretStore.Set(sync.TeamPassphraseKey(team.ID), passphrase); err != nil {
-				ui.Warn(fmt.Sprintf("Could not store the team passphrase in your keychain: %v", err))
+
+			// Legacy path: a shared passphrase, kept for teams that expect one.
+			if teamPassphraseFlag != "" || os.Getenv("NEURON_TEAM_PASSPHRASE") != "" {
+				passphrase, err := resolveTeamPassphrase(teamPassphraseFlag)
+				if err != nil {
+					ui.Error(err.Error())
+					os.Exit(1)
+				}
+				salt, err := sync.NewSalt()
+				if err != nil {
+					ui.Error(fmt.Sprintf("Could not generate a team salt: %v", err))
+					os.Exit(1)
+				}
+				team, err := client.CreateTeam(ctx, args[0], salt)
+				if err != nil {
+					ui.Error(fmt.Sprintf("Could not create the team: %v", err))
+					os.Exit(1)
+				}
+				if err := teams.Add(sync.TeamRef{TeamID: team.ID, Name: team.Name, Salt: team.Salt}); err != nil {
+					ui.Error(fmt.Sprintf("Could not save the team locally: %v", err))
+					os.Exit(1)
+				}
+				if err := secretStore.Set(sync.TeamPassphraseKey(team.ID), passphrase); err != nil {
+					ui.Warn(fmt.Sprintf("Could not store the team passphrase in your keychain: %v", err))
+				}
+				ui.Success(fmt.Sprintf("Created team %s (%s)", team.Name, team.ID))
+				fmt.Printf("Invite code: %s\n", color.CyanString(team.InviteCode))
+				ui.Step("Share it with teammates, then run `neuron team sync " + team.Name + "`")
+				return
 			}
 
+			team, err := createWrappedTeam(ctx, client, secretStore, args[0], teams)
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
 			ui.Success(fmt.Sprintf("Created team %s (%s)", team.Name, team.ID))
 			fmt.Printf("Invite code: %s\n", color.CyanString(team.InviteCode))
-			ui.Step("Share it with teammates, then run `neuron team sync " + team.Name + "`")
+			ui.Step("Teammates join with `neuron team join <code>`, then anyone holding the key")
+			ui.Step("grants it to them on their next `neuron team sync " + team.Name + "`")
+			if memberKeyFromEnv() {
+				ui.Info("This device's identity comes from " + sync.MemberKeyEnv)
+			}
 		},
 	}
 	teamCreateCmd.Flags().StringVar(&teamPassphraseFlag, "passphrase", "", "team passphrase (or set NEURON_TEAM_PASSPHRASE)")
@@ -1744,27 +1903,41 @@ func init() {
 				os.Exit(1)
 			}
 
-			passphrase, err := resolveTeamPassphrase(teamPassphraseFlag)
-			if err != nil {
-				ui.Error(err.Error())
-				os.Exit(1)
-			}
-
 			teams, err := sync.LoadTeams()
 			if err != nil {
 				ui.Error(err.Error())
 				os.Exit(1)
 			}
-			ref := sync.TeamRef{TeamID: team.ID, Name: team.Name, Salt: team.Salt}
-			if err := teams.Add(ref); err != nil {
-				ui.Error(fmt.Sprintf("Could not save the team locally: %v", err))
-				os.Exit(1)
-			}
-			if err := secretStore.Set(sync.TeamPassphraseKey(team.ID), passphrase); err != nil {
-				ui.Warn(fmt.Sprintf("Could not store the team passphrase in your keychain: %v", err))
+
+			// A team with a salt expects a shared passphrase; otherwise this
+			// device registers its key and waits to be granted the team key.
+			if team.Salt != "" {
+				passphrase, err := resolveTeamPassphrase(teamPassphraseFlag)
+				if err != nil {
+					ui.Error(err.Error())
+					os.Exit(1)
+				}
+				if err := teams.Add(sync.TeamRef{TeamID: team.ID, Name: team.Name, Salt: team.Salt}); err != nil {
+					ui.Error(fmt.Sprintf("Could not save the team locally: %v", err))
+					os.Exit(1)
+				}
+				if err := secretStore.Set(sync.TeamPassphraseKey(team.ID), passphrase); err != nil {
+					ui.Warn(fmt.Sprintf("Could not store the team passphrase in your keychain: %v", err))
+				}
+				ui.Success(fmt.Sprintf("Joined %s — run `neuron team sync %s`", team.Name, team.Name))
+				return
 			}
 
-			ui.Success(fmt.Sprintf("Joined %s — run `neuron team sync %s`", team.Name, team.Name))
+			if err := registerWrappedMember(ctx, client, secretStore, team, teams); err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+			ui.Success(fmt.Sprintf("Joined %s", team.Name))
+			ui.Step("Ask a teammate to run `neuron team sync " + team.Name + "` to grant you the team key,")
+			ui.Step("then run `neuron team sync " + team.Name + "` yourself")
+			if memberKeyFromEnv() {
+				ui.Info("This device's identity comes from " + sync.MemberKeyEnv)
+			}
 		},
 	}
 	teamJoinCmd.Flags().StringVar(&teamPassphraseFlag, "passphrase", "", "team passphrase (or set NEURON_TEAM_PASSPHRASE)")
@@ -1818,19 +1991,9 @@ func init() {
 				os.Exit(1)
 			}
 
-			passphrase, err := teamPassphrase(teamPassphraseFlag, ref.TeamID, secretStore)
+			teamKey, err := teamKeyFor(ctx, client, ref, secretStore, teamPassphraseFlag)
 			if err != nil {
 				ui.Error(err.Error())
-				os.Exit(1)
-			}
-			salt, err := ref.SaltBytes()
-			if err != nil {
-				ui.Error(err.Error())
-				os.Exit(1)
-			}
-			teamKey, err := sync.DeriveKey(passphrase, salt, 0)
-			if err != nil {
-				ui.Error(fmt.Sprintf("Could not derive the team key: %v", err))
 				os.Exit(1)
 			}
 
@@ -1881,7 +2044,44 @@ func init() {
 	}
 	teamSyncCmd.Flags().StringVar(&teamPassphraseFlag, "passphrase", "", "team passphrase (or set NEURON_TEAM_PASSPHRASE)")
 
-	teamCmd.AddCommand(teamCreateCmd, teamJoinCmd, teamListCmd, teamSyncCmd)
+	teamRotateCmd := &cobra.Command{
+		Use:   "rotate <team>",
+		Short: "Replace the team key and re-wrap it for every member device",
+		Long: "Generate a new team key and wrap it for every registered member device. Payloads shared " +
+			"before the rotation stay sealed with the previous key: rotation protects everything synced " +
+			"from now on, so a member who left cannot read future updates. Re-share or delete a server " +
+			"to revoke access to ciphertext that already exists.",
+		Args: cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			ctx := cmd.Context()
+			client, _, secretStore, err := requireSession()
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+
+			teams, err := sync.LoadTeams()
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+			ref, err := teams.Get(args[0])
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+
+			granted, err := rotateTeamKey(ctx, client, secretStore, ref)
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+			ui.Success(fmt.Sprintf("Rotated the team key and wrapped it for %d device(s)", granted))
+			ui.Step("Payloads shared before now stay sealed with the old key.")
+		},
+	}
+
+	teamCmd.AddCommand(teamCreateCmd, teamJoinCmd, teamListCmd, teamSyncCmd, teamRotateCmd)
 	rootCmd.AddCommand(teamCmd)
 
 	// runFlowCmd represents the run-flow command
@@ -1942,6 +2142,90 @@ func init() {
 			fmt.Println(Version)
 		},
 	}
+	// --- audit ------------------------------------------------------------
+
+	var (
+		auditSince  string
+		auditUntil  string
+		auditServer string
+		auditStatus string
+		auditTool   string
+		auditFormat string
+		auditOut    string
+	)
+	auditCmd := &cobra.Command{
+		Use:   "audit",
+		Short: "Work with the recorded call log",
+	}
+	auditExportCmd := &cobra.Command{
+		Use:   "export",
+		Short: "Export recorded tool calls as JSONL or CSV",
+		Long: "Write the calls recorded in ~/.neuron/history.jsonl (or NEURON_HISTORY) to stdout or a " +
+			"file. Arguments and results were already redacted and truncated when recorded, so an " +
+			"export never widens what is stored.",
+		Args: cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			path := os.Getenv("NEURON_HISTORY")
+			if path == "" {
+				path = proxy.DefaultHistoryPath()
+			}
+
+			calls, err := proxy.ReadCallsAt(path)
+			if err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+
+			filter := proxy.Filter{Server: auditServer, Status: auditStatus, Tool: auditTool}
+			if auditSince != "" {
+				since, err := parseTimeFlag("--since", auditSince)
+				if err != nil {
+					ui.Error(err.Error())
+					os.Exit(1)
+				}
+				filter.Since = since
+			}
+			if auditUntil != "" {
+				until, err := parseTimeFlag("--until", auditUntil)
+				if err != nil {
+					ui.Error(err.Error())
+					os.Exit(1)
+				}
+				filter.Until = until
+			}
+
+			selected := proxy.FilterCalls(calls, filter)
+
+			var out io.Writer = os.Stdout
+			if auditOut != "" && auditOut != "-" {
+				file, err := os.OpenFile(auditOut, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+				if err != nil {
+					ui.Error(fmt.Sprintf("Could not open %s: %v", auditOut, err))
+					os.Exit(1)
+				}
+				defer file.Close()
+				out = file
+			}
+
+			if err := proxy.WriteCalls(out, selected, auditFormat); err != nil {
+				ui.Error(err.Error())
+				os.Exit(1)
+			}
+			if auditOut != "" && auditOut != "-" {
+				ui.Success(fmt.Sprintf("Exported %d call(s) to %s", len(selected), auditOut))
+			}
+		},
+	}
+	auditExportCmd.Flags().StringVar(&auditSince, "since", "", "window start: a duration (24h) or an RFC3339 timestamp")
+	auditExportCmd.Flags().StringVar(&auditUntil, "until", "", "window end: a duration ago (1h) or an RFC3339 timestamp")
+	auditExportCmd.Flags().StringVar(&auditServer, "server", "", "only calls to this server")
+	auditExportCmd.Flags().StringVar(&auditStatus, "status", "", "only ok or error calls")
+	auditExportCmd.Flags().StringVar(&auditTool, "tool", "", "only calls to this tool")
+	auditExportCmd.Flags().StringVar(&auditFormat, "format", "jsonl", "jsonl or csv")
+	auditExportCmd.Flags().StringVar(&auditOut, "out", "-", "file to write (default stdout)")
+	auditCmd.AddCommand(auditExportCmd)
+	rootCmd.AddCommand(auditCmd)
+
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.Version = Version
 }
@@ -1967,6 +2251,32 @@ func resolvePassphrase(flagValue string) (string, error) {
 }
 
 // requireSession returns a client authenticated with the stored session.
+// parseTimeFlag accepts an RFC3339 timestamp or a duration meaning "that long
+// ago", so both `--since 24h` and `--since 2026-10-18T00:00:00Z` work.
+func parseTimeFlag(name, value string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339, value); err == nil {
+		return t, nil
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%s: %q is neither a duration like 24h nor an RFC3339 timestamp", name, value)
+	}
+	return time.Now().Add(-d), nil
+}
+
+// loadPolicyGuard loads the tool-call policy for one server. A missing policy
+// file is not an error: it means every call is allowed.
+func loadPolicyGuard(server string) (proxy.Guard, error) {
+	engine, err := policy.Load("")
+	switch {
+	case errors.Is(err, policy.ErrNoPolicy):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+	return engine.Guard(server), nil
+}
+
 func requireSession() (*sync.Client, *sync.Auth, *secrets.Store, error) {
 	auth, err := sync.LoadAuth()
 	if err != nil {

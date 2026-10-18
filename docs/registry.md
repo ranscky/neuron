@@ -23,18 +23,38 @@ neuron uninstall agents/researcher
 
 ## Publishing
 
+Publishing is **org-scoped and authenticated**. Every API key belongs to one org,
+and an org may only publish packages under its own name (`acme/web-search`).
+Reads — search, install, downloads — stay public.
+
+Create an org on your registry (it needs `NEURON_REGISTRY_ADMIN_TOKEN` set) and
+keep the key it prints; only its hash is stored, so it is shown once:
+
 ```bash
-mkdir my-tool && cd my-tool
-# create neuron.json and your entrypoint (see the manifest reference)
-neuron publish
+curl -sS -X POST http://127.0.0.1:8080/v1/orgs \
+  -H "X-Admin-Token: $NEURON_REGISTRY_ADMIN_TOKEN" \
+  -d '{"name":"acme"}'
+# {"org":{"id":"org_…","name":"acme"},"api_key":"nrn_…", …}
 ```
 
-`publish` validates `neuron.json`, archives the current directory, and uploads
-the manifest and tarball to the registry.
+Then publish under that namespace:
+
+```bash
+mkdir my-tool && cd my-tool
+# create neuron.json with "name": "acme/my-tool" (see the manifest reference)
+NEURON_REGISTRY_TOKEN=nrn_… neuron publish
+```
+
+Mint more keys (for CI, or to rotate) with the key you already have:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8080/v1/keys \
+  -H "Authorization: Bearer nrn_…" -d '{"label":"ci"}'
+```
 
 ## HTTP API
 
-The registry server exposes three routes:
+The registry server exposes these routes:
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -43,17 +63,21 @@ The registry server exposes three routes:
 | `GET` | `/v1/packages/<name>/versions` | Every published version |
 | `GET` | `/v1/packages/<name>/<version>` | Manifest for a specific version |
 | `GET` | `/v1/packages/<name>/<version>/download` | Package tarball |
-| `POST` | `/v1/publish` | Publish a manifest + tarball (multipart) |
+| `POST` | `/v1/publish` | Publish a manifest + tarball (multipart) — **requires an API key** |
+| `POST` | `/v1/orgs` | Create an org and get its first key — requires the admin token |
+| `POST` | `/v1/keys` | Mint another key for the authenticated org |
 
 ## Running your own
 
 ```bash
 cd registry
-PORT=8080 go run ./cmd/server
+# the admin token gates org creation — without it, nobody can claim an org
+NEURON_REGISTRY_ADMIN_TOKEN=$(openssl rand -hex 24) PORT=8080 go run ./cmd/server
 ```
 
 Storage is a file-backed store under `registry/data/packages`, with an inverted
-index for search. Point the CLI at it:
+index for search; orgs and API-key hashes live in `registry/data/orgs.json`. Point
+the CLI at it:
 
 ```bash
 export NEURON_REGISTRY_URL=http://127.0.0.1:8080
@@ -99,10 +123,12 @@ Neuron ships 10 packages across 4 categories.
 The registry is functional but the layer is being rebuilt on top of the MCP
 control plane. Known gaps, stated plainly:
 
-- **`/v1/publish` has no authentication.** Anyone who can reach the service can
-  publish. Do not run an untrusted public instance. (API-key auth and
-  org-scoped storage are implemented on an unmerged branch and need
-  reconciliation before shipping.)
+- **Publishing is authenticated and org-scoped.** `/v1/publish` needs an API key
+  (`Authorization: Bearer nrn_…`), and an org may only publish under its own name.
+  Org creation is gated by `NEURON_REGISTRY_ADMIN_TOKEN`; with it unset the
+  registry answers 503 rather than handing an org to whoever finds it first.
+- **Keys cannot be revoked yet.** Minting a new key is supported; retiring an old
+  one has no endpoint, so rotation currently means replacing the org.
 - **No signatures.** Packages are not cryptographically verified at install
   time.
 - **No evaluation scores** surfaced in search yet.

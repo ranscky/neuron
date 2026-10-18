@@ -8,6 +8,7 @@ header_pages:
   - mcp.md
   - secrets.md
   - observability.md
+  - policy.md
   - sync.md
   - registry.md
   - manifest.md

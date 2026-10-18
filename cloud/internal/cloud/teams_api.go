@@ -40,10 +40,16 @@ func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request, accoun
 		writeError(w, http.StatusBadRequest, "team name is required")
 		return
 	}
-	salt, err := decodeSalt(req.Salt)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+	// A salt is optional: teams that wrap a random key per member device do not
+	// derive anything from a passphrase, so they pass none.
+	var salt []byte
+	if strings.TrimSpace(req.Salt) != "" {
+		var err error
+		salt, err = decodeSalt(req.Salt)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	team, err := s.Store.CreateTeam(accountID, name, salt)

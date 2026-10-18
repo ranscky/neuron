@@ -6,11 +6,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // FileStore implements the Store interface using the local filesystem
 type FileStore struct {
 	index *Index
+	// mu guards org and API-key state, which is read and rewritten per call.
+	mu sync.Mutex
 }
 
 // NewFileStore creates a new FileStore instance
@@ -19,7 +22,7 @@ func NewFileStore() (*FileStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create index: %w", err)
 	}
-	
+
 	return &FileStore{
 		index: index,
 	}, nil
@@ -27,6 +30,15 @@ func NewFileStore() (*FileStore, error) {
 
 // Save stores tarballs and manifests to the filesystem and updates the index
 func (fs *FileStore) Save(name, version string, manifest []byte, tarball []byte) error {
+	// Names and versions become path segments, so they are validated here as
+	// well as at the HTTP boundary: nothing may escape the data directory.
+	if !ValidPackageName(name) {
+		return fmt.Errorf("invalid package name %q", name)
+	}
+	if !ValidVersion(version) {
+		return fmt.Errorf("invalid version %q", version)
+	}
+
 	// Create directory structure
 	dir := filepath.Join("data", "packages", name)
 	if err := os.MkdirAll(dir, 0755); err != nil {

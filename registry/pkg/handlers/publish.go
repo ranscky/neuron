@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/ranscky/neuron-registry/pkg/auth"
 	"github.com/ranscky/neuron-registry/pkg/store"
 )
 
@@ -40,6 +41,14 @@ func (h *PublishHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Publishing is the registry's only authenticated action. The key decides
+	// which org may write, and therefore which package names are allowed below.
+	org, ok := auth.OrgFrom(r.Context())
+	if !ok {
+		http.Error(w, `{"error": "publishing requires an API key"}`, http.StatusUnauthorized)
+		return
+	}
+
 	// Parse multipart form with max memory of 32MB
 	err := r.ParseMultipartForm(32 << 20)
 	if err != nil {
@@ -61,7 +70,7 @@ func (h *PublishHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "missing tarball field"}`, http.StatusBadRequest)
 		return
 	}
-	
+
 	// Open the tarball file
 	file, err := tarballFile[0].Open()
 	if err != nil {
@@ -92,6 +101,26 @@ func (h *PublishHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if manifest.Version == "" {
 		http.Error(w, `{"error": "manifest missing version field"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Names are org-scoped: an org may only publish under its own prefix. That
+	// is what keeps one tenant's namespace out of another's reach, without a
+	// separate ownership table to drift out of sync with the packages.
+	if !store.Owns(org.Name, manifest.Name) {
+		http.Error(w, fmt.Sprintf(
+			`{"error": "package %q is not in your namespace: publish it as %s/<package>"}`,
+			manifest.Name, org.Name), http.StatusForbidden)
+		return
+	}
+	if !store.ValidPackageName(manifest.Name) {
+		http.Error(w, `{"error": "invalid package name: use lowercase <org>/<package> (a-z, 0-9, . _ -)"}`,
+			http.StatusBadRequest)
+		return
+	}
+	if !store.ValidVersion(manifest.Version) {
+		http.Error(w, `{"error": "invalid version: use a plain version like 1.2.3 or 1.2.3-rc.1"}`,
+			http.StatusBadRequest)
 		return
 	}
 

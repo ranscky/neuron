@@ -74,7 +74,7 @@ func (f *fakeRemote) Push(ctx context.Context, blob *RemoteBlob) error {
 // secret store and sync state, pointed at a shared remote.
 func machine(t *testing.T, remote Remote, key *Key) (*Engine, *mcp.Store, *fakeSecrets) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	setHome(t)
 
 	store, err := mcp.NewStore()
 	if err != nil {
@@ -94,7 +94,7 @@ func testSyncKey(t *testing.T, passphrase string) *Key {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key, err := DeriveKey(passphrase, salt, testIterations)
+	key, err := testKeyFor(passphrase, salt)
 	if err != nil {
 		t.Fatal(err)
 	}

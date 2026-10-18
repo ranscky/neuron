@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"github.com/ranscky/neuron/internal/config"
@@ -32,6 +33,80 @@ func (p *PythonRuntime) Name() string {
 	return "python"
 }
 
+// pythonCandidates lists the interpreters to try, in order, as command prefixes
+// (a name plus any fixed arguments). NEURON_PYTHON overrides the search.
+//
+// Windows prefers `python`: `python3` frequently resolves to the Microsoft Store
+// alias, whose venv support is unreliable, and `py -3` is the launcher fallback.
+func pythonCandidates(goos, override string) [][]string {
+	if override != "" {
+		return [][]string{{override}}
+	}
+	if goos == "windows" {
+		return [][]string{{"python"}, {"py", "-3"}, {"python3"}}
+	}
+	return [][]string{{"python3"}, {"python"}}
+}
+
+// createVenv builds a virtual environment, trying each candidate interpreter in
+// turn.
+//
+// --clear is deliberate: a failed earlier attempt leaves a half-built venv
+// behind, and plain `python -m venv` would reuse it and fail forever (on Windows
+// the symptom is "Unable to copy … venvlauncher.exe"). --without-pip is used
+// when nothing needs installing, which also avoids a broken ensurepip failing an
+// otherwise fine environment.
+func createVenv(venvPath string, needPip bool) error {
+	var attempts []string
+	for _, candidate := range pythonCandidates(runtime.GOOS, os.Getenv("NEURON_PYTHON")) {
+		args := append([]string{}, candidate[1:]...)
+		args = append(args, "-m", "venv", "--clear")
+		if !needPip {
+			args = append(args, "--without-pip")
+		}
+		args = append(args, venvPath)
+
+		cmd := exec.Command(candidate[0], args...)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			attempts = append(attempts, fmt.Sprintf("%s: %v: %s",
+				strings.Join(candidate, " "), err, firstLine(string(output))))
+			continue
+		}
+		if _, statErr := os.Stat(venvPython(venvPath, runtime.GOOS)); statErr == nil {
+			return nil
+		}
+		attempts = append(attempts, fmt.Sprintf("%s: reported success but produced no interpreter",
+			strings.Join(candidate, " ")))
+	}
+
+	return fmt.Errorf("could not create a virtual environment at %s "+
+		"(set NEURON_PYTHON to choose an interpreter):\n  %s",
+		venvPath, strings.Join(attempts, "\n  "))
+}
+
+// venvHasPip reports whether the venv's interpreter can run pip.
+func venvHasPip(pythonPath string) bool {
+	return exec.Command(pythonPath, "-m", "pip", "--version").Run() == nil
+}
+
+// venvRuns reports whether the interpreter inside a venv actually works. A
+// half-built environment can still contain a python.exe that cannot start, so
+// existence is not enough.
+func venvRuns(pythonPath string) bool {
+	return exec.Command(pythonPath, "--version").Run() == nil
+}
+
+// firstLine keeps an interpreter's complaint readable in an error message.
+func firstLine(output string) string {
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return line
+		}
+	}
+	return "no output"
+}
+
 // SetupPackageVenv creates a virtual environment for a package and installs its requirements.
 func (p *PythonRuntime) SetupPackageVenv(name, version string) error {
 	homeDir, err := os.UserHomeDir()
@@ -39,26 +114,32 @@ func (p *PythonRuntime) SetupPackageVenv(name, version string) error {
 		return fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	venvName := strings.ReplaceAll(name, "/", "_")
-	venvPath := filepath.Join(homeDir, ".neuron", "venv", venvName)
-	if err := os.MkdirAll(venvPath, 0755); err != nil {
-		return fmt.Errorf("failed to create venv directory: %w", err)
+	venvPath := venvPathFor(homeDir, name)
+	packagePath := filepath.Join(homeDir, ".neuron", "packages", name, version)
+	requirementsPath := filepath.Join(packagePath, "requirements.txt")
+	needPip := false
+	if _, err := os.Stat(requirementsPath); err == nil {
+		needPip = true
 	}
 
-	venvPythonPath := filepath.Join(venvPath, "bin", "python3")
-	if _, err := os.Stat(venvPythonPath); os.IsNotExist(err) {
+	pythonPath := venvPython(venvPath, runtime.GOOS)
+	_, statErr := os.Stat(pythonPath)
+	healthy := statErr == nil && venvRuns(pythonPath) && (!needPip || venvHasPip(pythonPath))
+	if !healthy {
 		fmt.Printf("Creating virtual environment for %s...\n", name)
-		venvCmd := exec.Command("python3", "-m", "venv", venvPath)
-		if output, err := venvCmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to create virtual environment: %w\nOutput: %s", err, output)
+		if err := createVenv(venvPath, needPip); err != nil {
+			return err
+		}
+		if _, err := os.Stat(pythonPath); err != nil {
+			return fmt.Errorf("virtual environment at %s has no interpreter", venvPath)
 		}
 	}
 
-	packagePath := filepath.Join(homeDir, ".neuron", "packages", name, version)
-	requirementsPath := filepath.Join(packagePath, "requirements.txt")
-	if _, err := os.Stat(requirementsPath); err == nil {
+	if needPip {
 		fmt.Printf("Installing dependencies for %s@%s...\n", name, version)
-		pipCmd := exec.Command(filepath.Join(venvPath, "bin", "pip"), "install", "-r", requirementsPath, "-q", "--no-cache-dir")
+		// `python -m pip` rather than the pip script: the script's name and
+		// location differ between Windows and POSIX, the module call does not.
+		pipCmd := exec.Command(pythonPath, "-m", "pip", "install", "-r", requirementsPath, "-q", "--no-cache-dir")
 		var stderr bytes.Buffer
 		pipCmd.Stderr = &stderr
 		if err := pipCmd.Run(); err != nil {

@@ -4,12 +4,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
 
 func TestAuthRoundTrip(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setHome(t)
 
 	if _, err := LoadAuth(); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound before signing in, got %v", err)
@@ -54,8 +55,15 @@ func TestAuthRoundTrip(t *testing.T) {
 }
 
 func TestAuthFileIsNotWorldReadable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Windows does not store POSIX permission bits: a regular file reports
+		// 0666 whatever Go asks for. Access is governed by NTFS ACLs inherited
+		// from %USERPROFILE%, so this assertion cannot hold here.
+		t.Skip("POSIX file modes are not enforced on Windows")
+	}
+
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHomeTo(t, home)
 
 	if err := SaveAuth(&Auth{BaseURL: "x", AccountID: "y", Salt: "c2FsdA=="}); err != nil {
 		t.Fatal(err)

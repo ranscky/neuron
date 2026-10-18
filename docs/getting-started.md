@@ -7,7 +7,16 @@ title: Getting started
 
 ## Install
 
-There is no packaged installer yet. Build from source:
+```bash
+curl -fsSL https://raw.githubusercontent.com/ranscky/neuron/main/scripts/install.sh | sh
+```
+
+That downloads the release binary for your OS and architecture, verifies it
+against the release's `checksums.txt`, and installs it to `~/.local/bin` (use
+`--prefix` to change that). Override the release with `--version 0.1.0`, or
+build from a checkout with `--source`.
+
+Building from source by hand works too, if you have Go:
 
 ```bash
 git clone https://github.com/ranscky/neuron
@@ -22,7 +31,8 @@ Verify:
 neuron version
 ```
 
-> A `curl | sh` installer and Homebrew tap are planned but not published yet.
+> A Homebrew tap is published per release; `brew install ranscky/neuron/neuron`
+> becomes available once `scripts/publish-tap.sh` has been run for a release.
 
 ## Register your first server
 

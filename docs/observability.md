@@ -45,6 +45,28 @@ Each call is appended to `~/.neuron/history.jsonl`:
 
 The file is capped at 8 MB and rotated so it cannot grow without bound.
 
+## Export the log
+
+```bash
+neuron audit export                                   # everything, JSONL, to stdout
+neuron audit export --since 24h --format csv --out calls.csv
+neuron audit export --server github --status error    # just the failures
+```
+
+| Flag | Meaning |
+|---|---|
+| `--since`, `--until` | Window start/end: a duration like `24h` (that long ago) or an RFC3339 timestamp |
+| `--server`, `--tool` | Only calls for that server or that tool |
+| `--status` | `ok` or `error` |
+| `--format` | `jsonl` (default) or `csv` |
+| `--out` | File to write; `-` (the default) is stdout |
+
+The export is a faithful copy of what was recorded — arguments and results were
+already redacted and truncated when the call was recorded, so exporting cannot
+widen what is stored. Calls refused by [policy](policy.md) and calls abandoned by
+a crashed server both appear as `error` rows with their reason, which makes the
+export useful as an audit trail, not just a debug log.
+
 ## Redaction
 
 Before anything is written, argument keys matching any of `token`, `secret`,

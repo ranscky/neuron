@@ -72,6 +72,7 @@ neuron --version
 |---|---|
 | `neuron login` | Sign in to a sync service via device flow |
 | `neuron logout` | Sign out |
+| `neuron upgrade` | Start a Stripe Checkout session to subscribe to the Pro plan |
 | `neuron sync` | Sync MCP servers and secrets to your other machines |
 
 `neuron login` flags:
@@ -81,6 +82,7 @@ neuron --version
 | `--server` | Sync service base URL |
 | `--account` | Existing account id to sign in to |
 | `--approve` | Approve a pending user code instead of signing in |
+| `--link` | With `--approve`: print a one-time browser link instead of approving here (needs a session) |
 | `--auto-approve` | Approve this device automatically (self-hosted convenience) |
 
 `neuron sync` flags:
@@ -88,6 +90,13 @@ neuron --version
 | Flag | Description |
 |---|---|
 | `--passphrase` | Sync passphrase (or set `NEURON_PASSPHRASE`) |
+
+## Policy
+
+| Command | Description |
+|---|---|
+| `neuron policy show` | Print the loaded policy and where it came from |
+| `neuron policy check <server> <tool>` | Explain whether a tool call is allowed (exits 1 if denied) |
 
 ## Teams
 
@@ -97,8 +106,17 @@ neuron --version
 | `neuron team join <invite-code>` | Join a team |
 | `neuron team list` | List teams known to this machine |
 | `neuron team sync <team>` | Sync MCP servers with a team |
+| `neuron team rotate <team>` | Replace the team key and wrap it for every member device |
 
-`create`, `join` and `sync` accept `--passphrase` (or `NEURON_TEAM_PASSPHRASE`).
+Teams wrap their key per member device; `create`/`join`/`sync` also accept
+`--passphrase` (or `NEURON_TEAM_PASSPHRASE`) for legacy passphrase teams.
+`NEURON_MEMBER_KEY` supplies this device's identity on headless machines.
+
+## Audit
+
+| Command | Description |
+|---|---|
+| `neuron audit export` | Export recorded calls as JSONL or CSV (`--since`, `--until`, `--server`, `--tool`, `--status`, `--format`, `--out`) |
 
 ## Configuration
 
@@ -115,10 +133,13 @@ neuron --version
 | Variable | Purpose |
 |---|---|
 | `NEURON_REGISTRY_URL` | Registry to install from / publish to |
+| `NEURON_REGISTRY_TOKEN` | API key used by `neuron publish` (org-scoped; or pass `--token`) |
 | `NEURON_PROVIDER` | Provider for package execution (`openai`, `anthropic`, `groq`, `ollama`) |
 | `NEURON_MODEL` | Model name |
 | `NEURON_OPENAI_API_KEY` / `NEURON_ANTHROPIC_API_KEY` / `NEURON_GROQ_API_KEY` | Provider credentials |
 | `NEURON_OLLAMA_BASE_URL` | Local Ollama endpoint |
+| `NEURON_PYTHON` | Interpreter used to create package virtual environments (default: `python` on Windows, `python3` elsewhere) |
+| `NEURON_POLICY` | Path to the tool-call policy (default `~/.neuron/policy.json`) |
 | `NEURON_SYNC_SERVER` / `NEURON_SYNC_TOKEN` | Sync service URL / session token |
 | `NEURON_PASSPHRASE` | Personal sync passphrase |
 | `NEURON_TEAM_PASSPHRASE` | Team sync passphrase |

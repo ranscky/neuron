@@ -65,7 +65,7 @@ func TestPackagesHandlerWithScopedNames(t *testing.T) {
 		if rr.Code != http.StatusOK {
 			t.Errorf("Expected status 200, got %d", rr.Code)
 		}
-		
+
 		// Response should be an empty array
 		expected := "[]\n"
 		if rr.Body.String() != expected {
@@ -77,10 +77,10 @@ func TestPackagesHandlerWithScopedNames(t *testing.T) {
 func TestPathParsingLogic(t *testing.T) {
 	// Test the internal path parsing logic directly
 	testCases := []struct {
-		path          string
-		expectedName  string
+		path           string
+		expectedName   string
 		expectedAction string
-		isVersion     bool
+		isVersion      bool
 	}{
 		{"tools/web-search", "tools/web-search", "", false},
 		{"tools/web-search/1.0.2", "tools/web-search", "1.0.2", true},
@@ -94,19 +94,19 @@ func TestPathParsingLogic(t *testing.T) {
 		t.Run(tc.path, func(t *testing.T) {
 			// This is a simplified version of the path parsing logic
 			segments := bytes.Split([]byte(tc.path), []byte("/"))
-			
+
 			// For our test, we just want to make sure the splitting works correctly
 			if len(segments) < 1 {
 				t.Errorf("Expected at least one segment, got %d", len(segments))
 				return
 			}
-			
+
 			// Convert segments back to strings for easier comparison
 			segmentStrings := make([]string, len(segments))
 			for i, seg := range segments {
 				segmentStrings[i] = string(seg)
 			}
-			
+
 			t.Logf("Path: %s -> Segments: %v", tc.path, segmentStrings)
 		})
 	}

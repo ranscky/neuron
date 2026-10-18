@@ -1,0 +1,208 @@
+name: Release
+
+# Build the `neuron` CLI for every supported platform and publish it to a GitHub
+# release. Triggered by a tag (v0.1.0) or by hand from the Actions tab.
+#
+# The CLI is pure Go and CGO-free on every platform, so all six targets build on
+# a single Linux runner. registry/ and cloud/ are self-hosted servers and are not
+# release artifacts — they ship as source.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build, without the leading v (e.g. 0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Both are overridable so a fork can publish its own releases.
+  REPO: ${{ github.repository }}
+
+jobs:
+  version:
+    name: resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${INPUT_VERSION:-${REF_NAME#v}}"
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+            echo "error: '$VERSION' is not a semver version (expected 1.2.3)" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "building neuron $VERSION"
+
+  verify:
+    # A tag can be pushed to any commit, so gate the release on the same checks CI runs.
+    name: verify
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race -count=1 ./...
+
+  build:
+    name: ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: [version, verify]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Build and package
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          GOOS_TARGET: ${{ matrix.goos }}
+          GOARCH_TARGET: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          NAME="neuron_${VERSION}_${GOOS_TARGET}_${GOARCH_TARGET}"
+          STAGE="$RUNNER_TEMP/$NAME"
+          mkdir -p "$STAGE" dist
+
+          BIN="neuron"
+          if [ "$GOOS_TARGET" = windows ]; then BIN="neuron.exe"; fi
+
+          # -buildvcs=false keeps the binary reproducible without git metadata in
+          # the module; -trimpath strips the build machine's paths.
+          (
+            cd cli
+            CGO_ENABLED=0 GOOS="$GOOS_TARGET" GOARCH="$GOARCH_TARGET" \
+              go build -trimpath -buildvcs=false \
+              -ldflags "-s -w -X main.Version=${VERSION}" \
+              -o "$STAGE/$BIN" ./cmd/neuron
+          )
+
+          cp LICENSE README.md "$STAGE/"
+
+          if [ "$GOOS_TARGET" = windows ]; then
+            ( cd "$RUNNER_TEMP" && zip -qr "$GITHUB_WORKSPACE/dist/$NAME.zip" "$NAME" )
+          else
+            ( cd "$RUNNER_TEMP" && tar -czf "$GITHUB_WORKSPACE/dist/$NAME.tar.gz" "$NAME" )
+          fi
+
+      - name: Smoke-test the artifact
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          GOOS_TARGET: ${{ matrix.goos }}
+          GOARCH_TARGET: ${{ matrix.goarch }}
+          BIN: ${{ matrix.goos == 'windows' && 'neuron.exe' || 'neuron' }}
+        run: |
+          set -euo pipefail
+          # Only the runner's own platform can actually be executed here; for the
+          # rest, prove the binary exists, is non-empty and cross-compiled correctly.
+          BIN_PATH="$RUNNER_TEMP/neuron_${VERSION}_${GOOS_TARGET}_${GOARCH_TARGET}/$BIN"
+          test -s "$BIN_PATH"
+          if [ "$GOOS_TARGET" = linux ] && [ "$GOARCH_TARGET" = amd64 ]; then
+            got="$("$BIN_PATH" version)"
+            test "$got" = "$VERSION" || { echo "version mismatch: got '$got' want '$VERSION'" >&2; exit 1; }
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: neuron-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: publish
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Write checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          # Every archive is present before this runs, so the glob is complete.
+          sha256sum ./*.tar.gz ./*.zip > checksums.txt
+          cat checksums.txt
+
+      - name: Render the Homebrew formula
+        run: |
+          set -euo pipefail
+          # sha256sum may prefix the name with '*' (binary mode); strip it.
+          sha() { awk -v f="$1" '{ n = $2; sub(/^\*/, "", n); if (n == f) print $1 }' dist/checksums.txt; }
+          sed -e "s|@@VERSION@@|${VERSION}|g" \
+              -e "s|@@SHA256_DARWIN_AMD64@@|$(sha "neuron_${VERSION}_darwin_amd64.tar.gz")|g" \
+              -e "s|@@SHA256_DARWIN_ARM64@@|$(sha "neuron_${VERSION}_darwin_arm64.tar.gz")|g" \
+              -e "s|@@SHA256_LINUX_AMD64@@|$(sha "neuron_${VERSION}_linux_amd64.tar.gz")|g" \
+              -e "s|@@SHA256_LINUX_ARM64@@|$(sha "neuron_${VERSION}_linux_arm64.tar.gz")|g" \
+              scripts/homebrew/neuron.rb.in > dist/neuron.rb
+          # A placeholder left in the formula means a checksum lookup failed.
+          if grep -q '@@' dist/neuron.rb; then
+            echo "error: formula still contains placeholders:" >&2
+            grep '@@' dist/neuron.rb >&2
+            exit 1
+          fi
+          cat dist/neuron.rb
+
+      - name: Create the release
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          # A tag push already has its tag on the remote, so let gh resolve it
+          # there (the local checkout may not fetch tag refs). Only a manual run
+          # needs an explicit target.
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            gh release create "$TAG" dist/* \
+              --title "neuron $VERSION" --generate-notes
+          else
+            gh release create "$TAG" dist/* \
+              --title "neuron $VERSION" --generate-notes --target "$GITHUB_SHA"
+          fi

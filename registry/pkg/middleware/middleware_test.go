@@ -14,7 +14,7 @@ func TestLogger(t *testing.T) {
 	})
 
 	// Wrap with logger middleware
- loggedHandler := Logger(handler)
+	loggedHandler := Logger(handler)
 
 	// Create a test request
 	req := httptest.NewRequest("GET", "/", nil)

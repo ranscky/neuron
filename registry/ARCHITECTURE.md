@@ -12,7 +12,9 @@ It is a simple Go HTTP server that stores and serves AI tool packages.
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/v1/publish` | Upload a new package (multipart tar.gz + manifest) |
+| `POST` | `/v1/publish` | Upload a new package (multipart tar.gz + manifest) — **requires an API key** |
+| `POST` | `/v1/orgs` | Create an org and receive its first API key — requires the admin token |
+| `POST` | `/v1/keys` | Mint another API key for the authenticated org |
 | `GET` | `/v1/packages/:name` | Get latest package metadata |
 | `GET` | `/v1/packages/:name/:version` | Get specific version metadata |
 | `GET` | `/v1/packages/:name/:version/download` | Download package tarball |
@@ -96,9 +98,15 @@ simple to back up, simple to migrate later.
 as a map. Search is a simple string contains check on name and
 description. Fast enough for thousands of packages.
 
-**No auth.** Publishing is open — anyone who can reach the service can publish.
-Do not run an untrusted public instance. API-key auth and org-scoped storage are
-planned.
+**Auth and org scoping.** Publishing is the only authenticated action, and it is
+org-scoped: a bearer API key identifies one org, and that org may only publish
+names under its own prefix (`acme/web-search`). Keys live in `data/orgs.json` as
+SHA-256 hashes — the plaintext key is returned once, at creation, and never
+stored. Org creation is gated by `NEURON_REGISTRY_ADMIN_TOKEN` (503 when unset,
+so an unconfigured instance cannot be claimed by whoever reaches it first). Reads
+stay public, so the registry remains a public catalogue. There is no key
+revocation endpoint yet: rotation means minting a new key and, eventually,
+retiring the org.
 
 **CORS enabled.** The registry should be accessible from any client
 including browser-based tools.

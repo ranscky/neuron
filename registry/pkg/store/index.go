@@ -19,13 +19,13 @@ func NewIndex() (*Index, error) {
 	index := &Index{
 		packages: make(map[string]PackageInfo),
 	}
-	
+
 	// Try to load existing index
 	if err := index.Load(); err != nil {
 		// If loading fails, it's not fatal - we can start with an empty index
 		fmt.Printf("Warning: failed to load index: %v\n", err)
 	}
-	
+
 	return index, nil
 }
 
@@ -40,18 +40,18 @@ func (idx *Index) Load() error {
 		}
 		return fmt.Errorf("failed to read index from %s: %w", path, err)
 	}
-	
+
 	var packages []PackageInfo
 	if err := json.Unmarshal(data, &packages); err != nil {
 		return fmt.Errorf("failed to parse index: %w", err)
 	}
-	
+
 	// Convert slice to map for faster lookups
 	for _, pkg := range packages {
 		key := fmt.Sprintf("%s@%s", pkg.Name, pkg.Version)
 		idx.packages[key] = pkg
 	}
-	
+
 	return nil
 }
 
@@ -62,25 +62,25 @@ func (idx *Index) Save() error {
 	for _, pkg := range idx.packages {
 		packages = append(packages, pkg)
 	}
-	
+
 	// Marshal to JSON
 	data, err := json.MarshalIndent(packages, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal index: %w", err)
 	}
-	
+
 	// Ensure directory exists
 	dir := filepath.Dir(filepath.Join("data", "index.json"))
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", dir, err)
 	}
-	
+
 	// Write to file
 	path := filepath.Join("data", "index.json")
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		return fmt.Errorf("failed to write index to %s: %w", path, err)
 	}
-	
+
 	return nil
 }
 
@@ -95,32 +95,32 @@ func (idx *Index) AddPackage(pkg PackageInfo) error {
 // Returns only the latest version of each package
 func (idx *Index) Search(query string) []PackageInfo {
 	query = strings.ToLower(query)
-	
+
 	// Group packages by name
 	packagesByName := make(map[string][]PackageInfo)
-	
+
 	for _, pkg := range idx.packages {
 		name := strings.ToLower(pkg.Name)
 		description := strings.ToLower(pkg.Description)
-		
+
 		if query == "" || strings.Contains(name, query) || strings.Contains(description, query) {
 			packagesByName[pkg.Name] = append(packagesByName[pkg.Name], pkg)
 		}
 	}
-	
+
 	// For each package name, find the latest version
 	results := []PackageInfo{}
 	for _, packages := range packagesByName {
 		if len(packages) == 0 {
 			continue
 		}
-		
+
 		// If only one version exists, use it
 		if len(packages) == 1 {
 			results = append(results, packages[0])
 			continue
 		}
-		
+
 		// Find the latest version using semver comparison
 		latest := packages[0]
 		for i := 1; i < len(packages); i++ {
@@ -130,7 +130,7 @@ func (idx *Index) Search(query string) []PackageInfo {
 		}
 		results = append(results, latest)
 	}
-	
+
 	return results
 }
 
@@ -139,7 +139,7 @@ func (idx *Index) Search(query string) []PackageInfo {
 func compareSemVer(a, b string) int {
 	aParts := strings.Split(a, ".")
 	bParts := strings.Split(b, ".")
-	
+
 	// Compare each part (major, minor, patch)
 	for i := 0; i < 3; i++ {
 		// If one version has fewer parts, treat missing parts as 0
@@ -150,21 +150,21 @@ func compareSemVer(a, b string) int {
 		if i < len(bParts) {
 			bVal, _ = strconv.Atoi(bParts[i])
 		}
-		
+
 		if aVal < bVal {
 			return -1
 		} else if aVal > bVal {
 			return 1
 		}
 	}
-	
+
 	return 0
 }
 
 // GetLatest returns the highest semver version for a package
 func (idx *Index) GetLatest(name string) (string, error) {
 	versions := []string{}
-	
+
 	for key, pkg := range idx.packages {
 		if pkg.Name == name {
 			// Extract version from key (format: name@version)
@@ -174,16 +174,16 @@ func (idx *Index) GetLatest(name string) (string, error) {
 			}
 		}
 	}
-	
+
 	if len(versions) == 0 {
 		return "", fmt.Errorf("no versions found for package %s", name)
 	}
-	
+
 	// If only one version exists, return it
 	if len(versions) == 1 {
 		return versions[0], nil
 	}
-	
+
 	// Find the highest semver version
 	highest := versions[0]
 	for i := 1; i < len(versions); i++ {
@@ -191,6 +191,6 @@ func (idx *Index) GetLatest(name string) (string, error) {
 			highest = versions[i]
 		}
 	}
-	
+
 	return highest, nil
 }

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,6 +27,31 @@ type Server struct {
 	// RequirePro gates encrypted sync behind the paid plan. It is a field so a
 	// self-hoster can turn the paywall off.
 	RequirePro bool
+	// StripeSecretKey is the API secret key used to create Checkout Sessions.
+	// An empty value disables checkout, exactly as an empty WebhookSecret
+	// disables billing.
+	StripeSecretKey string
+	// StripePriceID is the recurring price a subscription buys.
+	StripePriceID string
+	// PublicBaseURL is the origin customers return to after checkout. Empty
+	// falls back to the request's own scheme and host.
+	PublicBaseURL string
+	// StripeAPIBase overrides Stripe's API endpoint. Tests point it at a fake.
+	StripeAPIBase string
+	// OIDC configures provider-backed device approval. Disabled unless the
+	// issuer, client id and secret are all set.
+	OIDC OIDCConfig
+	// OIDCHTTP talks to the identity provider; tests point it at a fake.
+	OIDCHTTP *http.Client
+
+	oidcMu            sync.Mutex
+	oidcProvider      *oidcProvider
+	oidcProviderUntil time.Time
+	oidcFlows         map[string]*oidcFlow
+
+	// stripeHTTP talks to Stripe; set in NewServer so the timeout is not
+	// inherited from http.DefaultClient.
+	stripeHTTP *http.Client
 
 	logger    *log.Logger
 	limiter   *RateLimiter
@@ -45,6 +71,8 @@ func NewServer(store *Store, webhookSecret string, logger *log.Logger) *Server {
 		accessTTL:     time.Hour,
 		deviceTTL:     10 * time.Minute,
 		now:           time.Now,
+		stripeHTTP:    &http.Client{Timeout: stripeTimeout},
+		OIDCHTTP:      &http.Client{Timeout: stripeTimeout},
 	}
 }
 
@@ -57,18 +85,30 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/device/code", s.handleDeviceCode)
 	mux.HandleFunc("POST /v1/device/approve", s.handleDeviceApprove)
 	mux.HandleFunc("POST /v1/device/token", s.handleDeviceToken)
+	// The browser side of the device flow: the page the device code advertises,
+	// plus the authenticated endpoint that mints approval links for it.
+	mux.HandleFunc("GET /activate", s.handleActivatePage)
+	mux.HandleFunc("POST /activate", s.handleActivateForm)
+	mux.HandleFunc("POST /v1/device/approvals", s.auth(s.handleCreateApproval))
+	// Provider-backed device approval (authorization code + PKCE).
+	mux.HandleFunc("GET /v1/auth/oidc/start", s.handleOIDCStart)
+	mux.HandleFunc("GET /v1/auth/oidc/callback", s.handleOIDCCallback)
 	mux.HandleFunc("GET /v1/account", s.auth(s.handleAccount))
 	mux.HandleFunc("POST /v1/logout", s.auth(s.handleLogout))
 	mux.HandleFunc("GET /v1/sync/blobs", s.auth(s.handleListBlobs))
 	mux.HandleFunc("GET /v1/sync/blobs/{name}", s.auth(s.handleGetBlob))
 	mux.HandleFunc("PUT /v1/sync/blobs/{name}", s.auth(s.handlePutBlob))
 	mux.HandleFunc("POST /v1/billing/webhook", s.handleWebhook)
+	mux.HandleFunc("POST /v1/billing/checkout", s.auth(s.handleCheckout))
 
 	// Team-shared configuration.
 	mux.HandleFunc("POST /v1/teams", s.auth(s.handleCreateTeam))
 	mux.HandleFunc("GET /v1/teams", s.auth(s.handleListTeams))
 	mux.HandleFunc("POST /v1/teams/join", s.auth(s.handleJoinTeam))
 	mux.HandleFunc("GET /v1/teams/{id}", s.auth(s.handleGetTeam))
+	mux.HandleFunc("GET /v1/teams/{id}/keys", s.auth(s.handleListTeamKeys))
+	mux.HandleFunc("PUT /v1/teams/{id}/keys", s.auth(s.handlePutTeamKey))
+	mux.HandleFunc("PUT /v1/teams/{id}/keys/{key}", s.auth(s.handleGrantTeamKey))
 	mux.HandleFunc("GET /v1/teams/{id}/blobs", s.auth(s.handleListTeamBlobs))
 	mux.HandleFunc("GET /v1/teams/{id}/blobs/{name}", s.auth(s.handleGetTeamBlob))
 	mux.HandleFunc("PUT /v1/teams/{id}/blobs/{name}", s.auth(s.handlePutTeamBlob))
@@ -185,18 +225,32 @@ func (s *Server) handleDeviceApprove(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		UserCode  string `json:"user_code"`
-		AccountID string `json:"account_id"`
+		UserCode      string `json:"user_code"`
+		AccountID     string `json:"account_id"`
+		ApprovalToken string `json:"approval_token"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
 	}
 
+	// A signed-in client approves for its own account, so it does not have to
+	// send an account id. The id is only needed when bootstrapping the first
+	// device, where no session exists anywhere yet.
+	accountID := req.AccountID
+	if accountID == "" && req.ApprovalToken == "" {
+		if token := bearerToken(r); token != "" {
+			if resolved, err := s.Store.ResolveToken(token); err == nil {
+				accountID = resolved
+			}
+		}
+	}
+
 	// User codes are printed uppercase; accept whatever case was typed.
-	err := s.Store.ApproveDeviceCode(strings.ToUpper(strings.TrimSpace(req.UserCode)), req.AccountID)
-	switch {
+	switch err := s.approveDevice(req.UserCode, accountID, req.ApprovalToken); {
 	case err == nil:
 		writeJSON(w, http.StatusOK, map[string]any{"approved": true})
+	case errors.Is(err, errNoAccount):
+		writeError(w, http.StatusBadRequest, "user_code, and either account_id or approval_token, are required")
 	case errors.Is(err, ErrExpired):
 		writeError(w, http.StatusGone, "that code has expired")
 	case errors.Is(err, ErrNotFound):

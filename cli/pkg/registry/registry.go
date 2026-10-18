@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 
 	"github.com/ranscky/neuron/pkg/manifest"
 )
@@ -49,6 +50,9 @@ type Registry interface {
 // RegistryClient implements the Registry interface
 type RegistryClient struct {
 	baseURL string
+	// token is the API key used for authenticated actions (publishing). Reads
+	// stay unauthenticated, so it can be empty for search/install.
+	token string
 }
 
 // NewRegistryClient creates a new registry client
@@ -62,7 +66,15 @@ func NewRegistryClient(baseURL string) *RegistryClient {
 	}
 	return &RegistryClient{
 		baseURL: baseURL,
+		token:   os.Getenv("NEURON_REGISTRY_TOKEN"),
 	}
+}
+
+// WithToken returns a copy of the client that publishes with the given API key.
+func (r *RegistryClient) WithToken(token string) *RegistryClient {
+	clone := *r
+	clone.token = token
+	return &clone
 }
 
 // Search implements Registry.Search
@@ -220,6 +232,9 @@ func (r *RegistryClient) Publish(manifest *manifest.Manifest, tarball []byte) er
 	}
 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	if r.token != "" {
+		req.Header.Set("Authorization", "Bearer "+r.token)
+	}
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -231,6 +246,11 @@ func (r *RegistryClient) Publish(manifest *manifest.Manifest, tarball []byte) er
 	// Check for non-200 response
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode == http.StatusUnauthorized {
+			return fmt.Errorf("publish rejected: %s (set NEURON_REGISTRY_TOKEN or pass --token — "+
+				"create an org with `curl -X POST %s/v1/orgs -H 'X-Admin-Token: …' -d '{\"name\":\"you\"}'`)",
+				strings.TrimSpace(string(body)), r.baseURL)
+		}
 		return fmt.Errorf("publish failed with status %d: %s", resp.StatusCode, string(body))
 	}
 

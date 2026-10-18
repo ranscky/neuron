@@ -14,7 +14,7 @@ neuron/
 ├── cloud/          # the self-hostable sync service (…/neuron-cloud)
 ├── registry/       # the package registry server (…/neuron-registry)
 ├── packages/       # example packages published to the registry
-└── scripts/        # install.sh (build from source)
+└── scripts/        # install.sh, publish-tap.sh, Homebrew formula template
 ```
 
 ## `cli/`
@@ -44,10 +44,16 @@ is in packages.
 | `~/.neuron/history.jsonl` | Recorded tool calls for wrapped servers (capped at 8 MB) |
 | `~/.neuron/lock.json` | Installed package versions |
 | `~/.neuron/packages/<name>/<version>/` | Installed package contents |
+| `~/.neuron/venv/<name>/` | Per-package Python virtual environment (`Scripts/` on Windows, `bin/` elsewhere) |
 | `~/.neuron/config.json` | CLI configuration |
 
 Secret **values** are never written to any of these; they live in the OS
 keychain.
+
+Python environments are created with the first working interpreter from
+`NEURON_PYTHON`, `python`, `py -3` and `python3` on Windows, and `python3` then
+`python` elsewhere. A half-built environment is rebuilt rather than reused, and
+pip is only installed when the package actually has a `requirements.txt`.
 
 ## `cloud/`
 

@@ -38,14 +38,22 @@ layer is being rebuilt on top of this foundation.
 ## Install
 
 ```bash
-# coming soon: curl -fsSL https://get.neuron.ai | sh
+# Linux and macOS — downloads the release binary and verifies its checksum
+curl -fsSL https://raw.githubusercontent.com/ranscky/neuron/main/scripts/install.sh | sh
 
-# for now, build from source
+# or, once the tap is published
+brew install ranscky/neuron/neuron
+
+# or build from source
 git clone https://github.com/ranscky/neuron
 cd neuron/cli
 go build -o neuron ./cmd/neuron
 sudo mv neuron /usr/local/bin/neuron
 ```
+
+The installer takes `--version`, `--prefix` and `--source`; see
+[`scripts/install.sh`](scripts/install.sh). Windows binaries are published as
+`.zip` archives on the [releases page](https://github.com/ranscky/neuron/releases).
 
 ---
 

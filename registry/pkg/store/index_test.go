@@ -62,7 +62,7 @@ func TestSearchReturnsLatestVersionOnly(t *testing.T) {
 
 	// Test search with empty query (should return all packages, but only latest version of each)
 	results := index.Search("")
-	
+
 	// Should return 2 packages (test-package and other-package)
 	if len(results) != 2 {
 		t.Errorf("Expected 2 packages, got %d", len(results))
@@ -71,7 +71,7 @@ func TestSearchReturnsLatestVersionOnly(t *testing.T) {
 	// Find test-package in results
 	var testPkgResult *PackageInfo
 	var otherPkgResult *PackageInfo
-	
+
 	for _, pkg := range results {
 		if pkg.Name == "test-package" {
 			testPkgResult = &pkg
@@ -102,7 +102,7 @@ func TestSearchReturnsLatestVersionOnly(t *testing.T) {
 
 	// Test search with specific query
 	results = index.Search("test")
-	
+
 	// Should return 1 package (test-package only)
 	if len(results) != 1 {
 		t.Errorf("Expected 1 package for query 'test', got %d", len(results))

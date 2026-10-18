@@ -17,9 +17,13 @@ type Team struct {
 	Name       string    `json:"name"`
 	OwnerID    string    `json:"owner_id"`
 	InviteCode string    `json:"invite_code"`
-	Salt       string    `json:"salt"`
+	Salt       string    `json:"salt,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 	Members    []string  `json:"members"`
+	// Keys holds one record per member device: its X25519 public key and the
+	// team key wrapped for it. Older teams created with a shared passphrase have
+	// no records here and keep working as before.
+	Keys map[string]*TeamKeyRecord `json:"keys,omitempty"`
 }
 
 // IsMember reports whether an account belongs to the team.
@@ -34,11 +38,10 @@ func (t *Team) IsMember(accountID string) bool {
 
 // CreateTeam creates a team owned by accountID and returns it, invite code
 // included.
+//
+// A salt is only needed by legacy teams that derive their key from a shared
+// passphrase. Teams that wrap a random key per member pass none.
 func (s *Store) CreateTeam(ownerID, name string, salt []byte) (*Team, error) {
-	if len(salt) == 0 {
-		return nil, errors.New("salt must not be empty")
-	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -60,9 +63,12 @@ func (s *Store) CreateTeam(ownerID, name string, salt []byte) (*Team, error) {
 		Name:       name,
 		OwnerID:    ownerID,
 		InviteCode: invite,
-		Salt:       base64.StdEncoding.EncodeToString(salt),
 		CreatedAt:  time.Now().UTC(),
 		Members:    []string{ownerID},
+		Keys:       map[string]*TeamKeyRecord{},
+	}
+	if len(salt) > 0 {
+		team.Salt = base64.StdEncoding.EncodeToString(salt)
 	}
 	s.data.Teams[id] = team
 	s.data.TeamInvites[invite] = id
@@ -210,5 +216,12 @@ func (s *Store) teamForMemberLocked(teamID, accountID string) (*Team, error) {
 func cloneTeam(team *Team) *Team {
 	cp := *team
 	cp.Members = append([]string(nil), team.Members...)
+	if team.Keys != nil {
+		cp.Keys = make(map[string]*TeamKeyRecord, len(team.Keys))
+		for key, record := range team.Keys {
+			clone := *record
+			cp.Keys[key] = &clone
+		}
+	}
 	return &cp
 }

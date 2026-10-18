@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -65,6 +66,16 @@ type DeviceCode struct {
 	ExpiresAt  time.Time `json:"expires_at"`
 }
 
+// Approval is a one-time authorisation to approve a pending device code from a
+// browser. A signed-in client mints it; the /activate page consumes it. It
+// carries the account and code, so the browser never handles either the account
+// id or a session token. Only the hash of the token is stored.
+type Approval struct {
+	UserCode  string    `json:"user_code"`
+	AccountID string    `json:"account_id"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
 type tokenRecord struct {
 	AccountID string    `json:"account_id"`
 	ExpiresAt time.Time `json:"expires_at"`
@@ -77,6 +88,8 @@ type persisted struct {
 	Accounts    map[string]*Account         `json:"accounts"`
 	Blobs       map[string]map[string]*Blob `json:"blobs"`
 	DeviceCodes map[string]*DeviceCode      `json:"device_codes"`
+	// Approvals is keyed by the SHA-256 of a one-time approval token.
+	Approvals map[string]*Approval `json:"approvals"`
 	// ProcessedEvents makes billing webhooks idempotent: Stripe retries, and a
 	// retry must not re-apply a plan change.
 	ProcessedEvents map[string]time.Time `json:"processed_events"`
@@ -121,6 +134,7 @@ func emptyData() persisted {
 		Accounts:        map[string]*Account{},
 		Blobs:           map[string]map[string]*Blob{},
 		DeviceCodes:     map[string]*DeviceCode{},
+		Approvals:       map[string]*Approval{},
 		ProcessedEvents: map[string]time.Time{},
 		Teams:           map[string]*Team{},
 		TeamInvites:     map[string]string{},
@@ -140,6 +154,9 @@ func (s *Store) ensureMaps() {
 	}
 	if s.data.DeviceCodes == nil {
 		s.data.DeviceCodes = map[string]*DeviceCode{}
+	}
+	if s.data.Approvals == nil {
+		s.data.Approvals = map[string]*Approval{}
 	}
 	if s.data.ProcessedEvents == nil {
 		s.data.ProcessedEvents = map[string]time.Time{}
@@ -341,6 +358,15 @@ func (s *Store) ApproveDeviceCode(userCode, accountID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := s.approveLocked(userCode, accountID); err != nil {
+		return err
+	}
+	return s.saveLocked()
+}
+
+// approveLocked does the work of ApproveDeviceCode without persisting, so the
+// approval-link path can do both in one write.
+func (s *Store) approveLocked(userCode, accountID string) error {
 	if _, ok := s.data.Accounts[accountID]; !ok {
 		return ErrNotFound
 	}
@@ -353,9 +379,93 @@ func (s *Store) ApproveDeviceCode(userCode, accountID string) error {
 		}
 		code.AccountID = accountID
 		code.Approved = true
-		return s.saveLocked()
+		return nil
 	}
 	return ErrNotFound
+}
+
+// CreateApproval mints a one-time token that approves a pending device code for
+// an account. It is how a signed-in machine hands approval to a browser without
+// giving the browser a session token.
+func (s *Store) CreateApproval(userCode, accountID string, ttl time.Duration) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.data.Accounts[accountID]; !ok {
+		return "", ErrNotFound
+	}
+
+	userCode = strings.ToUpper(strings.TrimSpace(userCode))
+	pending := false
+	for _, code := range s.data.DeviceCodes {
+		if code.UserCode != userCode {
+			continue
+		}
+		if time.Now().UTC().After(code.ExpiresAt) {
+			return "", ErrExpired
+		}
+		pending = true
+		break
+	}
+	if !pending {
+		return "", ErrNotFound
+	}
+
+	token, err := randomID("", 32)
+	if err != nil {
+		return "", err
+	}
+	s.data.Approvals[hashToken(token)] = &Approval{
+		UserCode:  userCode,
+		AccountID: accountID,
+		ExpiresAt: time.Now().UTC().Add(ttl),
+	}
+	if err := s.saveLocked(); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// PeekApproval resolves a token without consuming it, so the activation page can
+// show what is about to be approved before the user clicks.
+func (s *Store) PeekApproval(token string) (*Approval, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	approval, ok := s.data.Approvals[hashToken(token)]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	if time.Now().UTC().After(approval.ExpiresAt) {
+		return nil, ErrExpired
+	}
+	cp := *approval
+	return &cp, nil
+}
+
+// ConsumeApproval approves the bound device code and burns the token.
+func (s *Store) ConsumeApproval(token string) (*Approval, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	key := hashToken(token)
+	approval, ok := s.data.Approvals[key]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	// Single use, whether or not it still works: a failed attempt must not leave
+	// a token around to be retried.
+	delete(s.data.Approvals, key)
+	defer func() { _ = s.saveLocked() }()
+
+	if time.Now().UTC().After(approval.ExpiresAt) {
+		return nil, ErrExpired
+	}
+	if err := s.approveLocked(approval.UserCode, approval.AccountID); err != nil {
+		return nil, err
+	}
+	cp := *approval
+	return &cp, nil
 }
 
 // PollDeviceCode exchanges an approved device code for an access token.
@@ -466,4 +576,24 @@ func randomUserCode() (string, error) {
 		out = append(out, alphabet[int(b)%len(alphabet)])
 	}
 	return string(out), nil
+}
+
+// FindAccountByEmail returns the account registered with that email. It is how a
+// verified identity provider claim is linked to an existing account.
+func (s *Store) FindAccountByEmail(email string) (*Account, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return nil, ErrNotFound
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, account := range s.data.Accounts {
+		if strings.ToLower(strings.TrimSpace(account.Email)) == email {
+			cp := *account
+			return &cp, nil
+		}
+	}
+	return nil, ErrNotFound
 }

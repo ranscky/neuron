@@ -33,6 +33,33 @@ source of truth; client configs are a projection of it.
 | `--url` | Remote server URL |
 | `--type` | Remote transport type, e.g. `http`, `sse` |
 
+## Remote servers
+
+A server registered with `--url` is reached over HTTP instead of being spawned.
+`neuron mcp run <name>` proxies it through the same session as a local server, so
+**policy and recording apply identically** — a denied tool never leaves the
+machine, and every call lands in the history.
+
+```bash
+neuron mcp add linear --url https://mcp.linear.app/mcp --type http
+```
+
+Two transports are supported:
+
+| `--type` | How it works |
+|---|---|
+| `http` (default) | Each client message is POSTed to the URL. The response may be one JSON message or an SSE stream. An `Mcp-Session-Id` response header is echoed on later requests. |
+| `sse` | A GET stream announces an `endpoint` event naming where to POST; every response arrives on that stream. |
+
+When the transport itself fails — the host is unreachable, or the server answers
+with an error status — the waiting request is answered with a JSON-RPC `-32000`
+error instead of hanging, and the failure is recorded like any other.
+
+What is *not* covered: Neuron does not host remote servers. `cloud/` stores
+encrypted configuration; running a shared MCP server on the service is still to
+come. A remote server's credentials are also not injected by Neuron — they belong
+to the endpoint, so put them in that endpoint's own configuration.
+
 ## Supported clients
 
 Neuron detects these clients and writes to the config file each one uses. It

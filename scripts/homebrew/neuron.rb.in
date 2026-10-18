@@ -1,0 +1,42 @@
+# Homebrew formula for the Neuron CLI.
+#
+# This is a template. .github/workflows/release.yml fills in the version and the
+# sha256 of each archive, attaches the rendered formula to the release as
+# `neuron.rb`, and scripts/publish-tap.sh copies it into a tap.
+#
+# Install straight from a tap once it exists:
+#   brew install ranscky/neuron/neuron
+class Neuron < Formula
+  desc "MCP control plane for developers — one manifest, every AI client"
+  homepage "https://github.com/ranscky/neuron"
+  version "@@VERSION@@"
+  license "MIT"
+
+  on_macos do
+    if Hardware::CPU.arm?
+      url "https://github.com/ranscky/neuron/releases/download/v@@VERSION@@/neuron_@@VERSION@@_darwin_arm64.tar.gz"
+      sha256 "@@SHA256_DARWIN_ARM64@@"
+    else
+      url "https://github.com/ranscky/neuron/releases/download/v@@VERSION@@/neuron_@@VERSION@@_darwin_amd64.tar.gz"
+      sha256 "@@SHA256_DARWIN_AMD64@@"
+    end
+  end
+
+  on_linux do
+    if Hardware::CPU.arm?
+      url "https://github.com/ranscky/neuron/releases/download/v@@VERSION@@/neuron_@@VERSION@@_linux_arm64.tar.gz"
+      sha256 "@@SHA256_LINUX_ARM64@@"
+    else
+      url "https://github.com/ranscky/neuron/releases/download/v@@VERSION@@/neuron_@@VERSION@@_linux_amd64.tar.gz"
+      sha256 "@@SHA256_LINUX_AMD64@@"
+    end
+  end
+
+  def install
+    bin.install "neuron"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/neuron version")
+  end
+end

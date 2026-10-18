@@ -111,10 +111,12 @@ func TestInstaller(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
-	// Temporarily change the home directory for testing
-	oldHome := os.Getenv("HOME")
-	os.Setenv("HOME", tempDir)
-	defer os.Setenv("HOME", oldHome)
+	// Isolate the home directory for the whole test. Both variables are set on
+	// purpose: os.UserHomeDir reads HOME on Unix but USERPROFILE on Windows, so
+	// setting only HOME would leave this test writing to the real profile — and
+	// then asserting against the temporary one.
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
 
 	// Create a new installer (this will create a lockfile in our temp directory)
 	installer, err := NewInstaller()
