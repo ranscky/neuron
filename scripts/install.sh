@@ -205,9 +205,9 @@ if [ "$VERIFY" = 1 ]; then
   if ! curl -fsSL --retry 3 "$checksums_url" -o "${tmp}/checksums.txt"; then
     die "could not download checksums.txt — refusing to install unverified (use --no-verify to override)"
   fi
-  # sha256sum marks binary mode with a leading '*'; strip it so the same file
-  # parses whether it was produced on Linux, macOS or Windows.
-  expected="$(awk -v name="$asset" '{ f = $2; sub(/^\*/, "", f); if (f == name) print $1 }' "${tmp}/checksums.txt")"
+  # Checksum lines are "hash  name". Strip the markers a platform may add
+  # (sha256sum's binary '*' and a leading "./") so the match cannot silently miss.
+  expected="$(awk -v name="$asset" '{ f = $2; sub(/^\*/, "", f); sub(/^\.\//, "", f); if (f == name) print $1 }' "${tmp}/checksums.txt")"
   [ -n "$expected" ] || die "${asset} is not listed in checksums.txt"
   actual="$(sha256_of "${tmp}/${asset}")" || die "no sha256 tool available (need sha256sum or shasum)"
   if [ "$expected" != "$actual" ]; then

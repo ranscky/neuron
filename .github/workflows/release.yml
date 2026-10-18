@@ -170,14 +170,18 @@ jobs:
           set -euo pipefail
           cd dist
           # Every archive is present before this runs, so the glob is complete.
-          sha256sum ./*.tar.gz ./*.zip > checksums.txt
+          # Bare file names on purpose: consumers match on the name, and a "./"
+          # prefix would silently never match.
+          sha256sum *.tar.gz *.zip > checksums.txt
           cat checksums.txt
 
       - name: Render the Homebrew formula
         run: |
           set -euo pipefail
-          # sha256sum may prefix the name with '*' (binary mode); strip it.
-          sha() { awk -v f="$1" '{ n = $2; sub(/^\*/, "", n); if (n == f) print $1 }' dist/checksums.txt; }
+          # Checksum lines are "hash  name". Tolerate sha256sum's binary-mode '*'
+          # and a leading "./" so a lookup can never silently miss and render an
+          # empty digest into the formula.
+          sha() { awk -v f="$1" '{ n = $2; sub(/^\*/, "", n); sub(/^\.\//, "", n); if (n == f) print $1 }' dist/checksums.txt; }
           sed -e "s|@@VERSION@@|${VERSION}|g" \
               -e "s|@@SHA256_DARWIN_AMD64@@|$(sha "neuron_${VERSION}_darwin_amd64.tar.gz")|g" \
               -e "s|@@SHA256_DARWIN_ARM64@@|$(sha "neuron_${VERSION}_darwin_arm64.tar.gz")|g" \
@@ -188,6 +192,15 @@ jobs:
           if grep -q '@@' dist/neuron.rb; then
             echo "error: formula still contains placeholders:" >&2
             grep '@@' dist/neuron.rb >&2
+            exit 1
+          fi
+          # A placeholder substituted with nothing passes the check above, so
+          # require four real digests. This is what keeps a formula with empty
+          # sha256 fields out of a release.
+          digests="$(grep -cE 'sha256 "[0-9a-f]{64}"' dist/neuron.rb || true)"
+          if [ "$digests" -ne 4 ]; then
+            echo "error: the formula has ${digests} valid sha256 digests, expected 4" >&2
+            cat dist/neuron.rb >&2
             exit 1
           fi
           cat dist/neuron.rb
