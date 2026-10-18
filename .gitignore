@@ -5,10 +5,13 @@ registry/neuron-registry
 registry/registry
 cloud/neuron-cloud
 
-# Any other top-level binaries that show up
+# Any other top-level binaries that show up.
+#
+# `/registry` and `/server` used to be listed here. They also match the registry/
+# source directory, so new files under it were ignored without a word — CI built
+# a tree without registry/pkg/auth. Root-level directory names are not safe to
+# ignore; name the binary instead.
 /neuron
-/registry
-/server
 
 # --- Python ---
 __pycache__/
