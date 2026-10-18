@@ -223,7 +223,7 @@ func TestSetPlanAndStripe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Plan != PlanPro || got.StripeCustomerID != "cus_123" || got.StripeSubscriptionID != "sub_456" {
+	if got.Plan != PlanPro || got.BillingCustomerID != "cus_123" || got.BillingSubscriptionID != "sub_456" {
 		t.Errorf("unexpected account after upgrade: %+v", got)
 	}
 }

@@ -97,24 +97,59 @@ so the provider must assert one.
 ## Subscribing
 
 ```bash
-neuron upgrade        # prints a Stripe Checkout URL
+neuron upgrade        # prints the checkout URL for the configured processor
 ```
 
-Checkout Sessions are created by the sync service, so it needs these where it
-runs:
+Checkout is created by the sync service, and the processor is a configuration
+choice. The CLI never learns which one is used.
+
+### Choosing a processor
+
+| `NEURON_BILLING_PROVIDER` | Behaviour |
+|---|---|
+| unset (default) | Stripe when it is configured, otherwise Paystack |
+| `stripe` | Stripe only |
+| `paystack` | Paystack only |
+| anything else | Billing answers `503` — an unknown name is a mistake, not a fallback |
+
+**Why Paystack exists here:** Stripe cannot onboard a business registered in
+every country — Ghana, for one. Paystack is licensed by the Bank of Ghana,
+settles in GHS to a bank account or mobile-money wallet, and accepts
+international cards, so customers abroad can still pay.
+
+### Stripe
 
 | Variable | Meaning |
 |---|---|
-| `STRIPE_SECRET_KEY` | API key used to create Checkout Sessions; unset disables checkout |
+| `STRIPE_SECRET_KEY` | API key used to create Checkout Sessions |
 | `STRIPE_PRICE_ID` | the recurring price a subscription buys |
 | `STRIPE_WEBHOOK_SECRET` | signing secret for the webhook that flips the plan |
 | `NEURON_PUBLIC_URL` | origin customers return to after checkout (default: the request's origin) |
 
-The plan changes only when Stripe calls the service's webhook:
-`checkout.session.completed`, `customer.subscription.updated` and `invoice.paid`
-grant Pro; `customer.subscription.deleted` returns the account to free. A client
-that abandons checkout stays on the free plan, and card details never reach the
-Neuron service.
+Events that grant Pro: `checkout.session.completed`,
+`customer.subscription.updated`, `invoice.paid`. `customer.subscription.deleted`
+returns the account to free.
+
+### Paystack
+
+| Variable | Meaning |
+|---|---|
+| `NEURON_PAYSTACK_SECRET_KEY` | API secret key; also signs webhooks |
+| `NEURON_PAYSTACK_PLAN` | the plan code from the Paystack dashboard |
+| `NEURON_PAYSTACK_CURRENCY` | optional settlement currency, e.g. `GHS` |
+| `NEURON_PAYSTACK_AMOUNT` | optional amount in minor units (pesewas); the plan normally carries the price |
+| `NEURON_PAYSTACK_API_BASE` | optional API override, for tests or a proxy |
+
+Point the Paystack dashboard's webhook URL at `<public base>/v1/billing/webhook`.
+`subscription.create` and the first `charge.success` of a plan grant Pro;
+`subscription.disable` returns the account to free. A charge for a *different*
+plan code is ignored, so another product on the same account can never unlock
+Neuron. Events are de-duplicated by transaction id, so Paystack's retries are
+harmless.
+
+For both processors the plan changes only when the signed webhook arrives: a
+client that abandons checkout stays on the free plan, and card details never
+reach the Neuron service.
 
 ## Self-hosting without a paid plan
 

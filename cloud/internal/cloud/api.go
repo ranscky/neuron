@@ -21,15 +21,15 @@ const maxRequestBody = 4 << 20
 // Server is the Neuron sync service.
 type Server struct {
 	Store *Store
-	// WebhookSecret is the Stripe signing secret. An empty value disables
-	// billing entirely rather than accepting unverified webhooks.
+	// WebhookSecret is the Stripe signing secret. Paystack signs with its secret
+	// key instead. An empty value disables that provider rather than accepting
+	// unverified webhooks.
 	WebhookSecret string
 	// RequirePro gates encrypted sync behind the paid plan. It is a field so a
 	// self-hoster can turn the paywall off.
 	RequirePro bool
 	// StripeSecretKey is the API secret key used to create Checkout Sessions.
-	// An empty value disables checkout, exactly as an empty WebhookSecret
-	// disables billing.
+	// An empty value disables Stripe checkout.
 	StripeSecretKey string
 	// StripePriceID is the recurring price a subscription buys.
 	StripePriceID string
@@ -38,6 +38,24 @@ type Server struct {
 	PublicBaseURL string
 	// StripeAPIBase overrides Stripe's API endpoint. Tests point it at a fake.
 	StripeAPIBase string
+
+	// BillingProviderName selects the payment processor: "stripe", "paystack",
+	// or empty to use whichever is configured (Stripe first). Stripe cannot
+	// onboard a business registered in every country, which is why Paystack
+	// exists here.
+	BillingProviderName string
+	// PaystackSecretKey authenticates API calls and signs webhooks.
+	PaystackSecretKey string
+	// PaystackPlanCode is the subscription plan created in the Paystack
+	// dashboard. An empty value disables Paystack checkout.
+	PaystackPlanCode string
+	// PaystackCurrency is the settlement currency (default: the plan's own).
+	PaystackCurrency string
+	// PaystackAmount is optional and in minor units (pesewas); the plan normally
+	// carries its own price.
+	PaystackAmount int64
+	// PaystackAPIBase overrides Paystack's API endpoint for tests.
+	PaystackAPIBase string
 	// OIDC configures provider-backed device approval. Disabled unless the
 	// issuer, client id and secret are all set.
 	OIDC OIDCConfig
@@ -49,9 +67,10 @@ type Server struct {
 	oidcProviderUntil time.Time
 	oidcFlows         map[string]*oidcFlow
 
-	// stripeHTTP talks to Stripe; set in NewServer so the timeout is not
-	// inherited from http.DefaultClient.
-	stripeHTTP *http.Client
+	// paystackHTTP and stripeHTTP talk to the processor; set in NewServer so the
+	// timeout is not inherited from http.DefaultClient.
+	stripeHTTP   *http.Client
+	paystackHTTP *http.Client
 
 	logger    *log.Logger
 	limiter   *RateLimiter
@@ -71,8 +90,9 @@ func NewServer(store *Store, webhookSecret string, logger *log.Logger) *Server {
 		accessTTL:     time.Hour,
 		deviceTTL:     10 * time.Minute,
 		now:           time.Now,
-		stripeHTTP:    &http.Client{Timeout: stripeTimeout},
-		OIDCHTTP:      &http.Client{Timeout: stripeTimeout},
+		stripeHTTP:    &http.Client{Timeout: billingTimeout},
+		OIDCHTTP:      &http.Client{Timeout: billingTimeout},
+		paystackHTTP:  &http.Client{Timeout: billingTimeout},
 	}
 }
 
@@ -395,34 +415,30 @@ func (s *Server) requireSync(w http.ResponseWriter, accountID string) bool {
 	return true
 }
 
-type stripeEvent struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
-	Data struct {
-		Object struct {
-			ClientReferenceID string            `json:"client_reference_id"`
-			Customer          string            `json:"customer"`
-			Subscription      string            `json:"subscription"`
-			Metadata          map[string]string `json:"metadata"`
-		} `json:"object"`
-	} `json:"data"`
-}
-
+// handleWebhook applies a payment processor's event: it authenticates the payload
+// with the configured provider, normalises it, and moves the account's plan. The
+// provider is chosen by configuration, so one route serves either processor.
 func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
+	provider := s.webhookProvider()
+	if provider == nil {
+		writeError(w, http.StatusServiceUnavailable, "billing is not configured")
+		return
+	}
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBody))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "could not read body")
 		return
 	}
 
-	if err := VerifyStripeSignature(body, r.Header.Get("Stripe-Signature"), s.WebhookSecret, DefaultSignatureTolerance, s.now()); err != nil {
+	if err := provider.VerifyWebhook(body, r.Header); err != nil {
 		// Deliberately generic: do not tell an attacker which check failed.
 		writeError(w, http.StatusBadRequest, "invalid webhook signature")
 		return
 	}
 
-	var event stripeEvent
-	if err := json.Unmarshal(body, &event); err != nil {
+	event, err := provider.ParseEvent(body)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid event payload")
 		return
 	}
@@ -431,30 +447,28 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Stripe retries aggressively; applying an event twice must be a no-op.
+	// Providers retry aggressively; applying an event twice must be a no-op.
 	if s.Store.HasProcessedEvent(event.ID) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "already processed"})
 		return
 	}
 
-	accountID := s.resolveAccount(event)
-
-	switch event.Type {
-	case "checkout.session.completed", "customer.subscription.updated", "invoice.paid":
-		if accountID != "" {
+	switch event.Change {
+	case PlanActivate:
+		if accountID := s.resolveBillingAccount(event); accountID != "" {
 			if err := s.Store.SetPlan(accountID, PlanPro); err != nil && !errors.Is(err, ErrNotFound) {
 				writeError(w, http.StatusInternalServerError, "could not update plan")
 				return
 			}
-			if event.Data.Object.Customer != "" {
-				if err := s.Store.SetStripe(accountID, event.Data.Object.Customer, event.Data.Object.Subscription); err != nil && !errors.Is(err, ErrNotFound) {
+			if event.CustomerID != "" || event.SubscriptionID != "" {
+				if err := s.Store.SetBilling(accountID, event.CustomerID, event.SubscriptionID); err != nil && !errors.Is(err, ErrNotFound) {
 					writeError(w, http.StatusInternalServerError, "could not link subscription")
 					return
 				}
 			}
 		}
-	case "customer.subscription.deleted":
-		if accountID != "" {
+	case PlanDeactivate:
+		if accountID := s.resolveBillingAccount(event); accountID != "" {
 			if err := s.Store.SetPlan(accountID, PlanFree); err != nil && !errors.Is(err, ErrNotFound) {
 				writeError(w, http.StatusInternalServerError, "could not downgrade plan")
 				return
@@ -467,23 +481,6 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
-}
-
-// resolveAccount finds the account a billing event belongs to, preferring our
-// own metadata and falling back to the Stripe customer id.
-func (s *Server) resolveAccount(event stripeEvent) string {
-	if id := event.Data.Object.Metadata["account_id"]; id != "" {
-		return id
-	}
-	if id := event.Data.Object.ClientReferenceID; id != "" {
-		return id
-	}
-	if event.Data.Object.Customer != "" {
-		if id, err := s.Store.FindAccountByStripeCustomer(event.Data.Object.Customer); err == nil {
-			return id
-		}
-	}
-	return ""
 }
 
 // --- helpers ----------------------------------------------------------------

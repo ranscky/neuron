@@ -39,13 +39,16 @@ var (
 // Account is a sync account. Salt is key-derivation material and is not secret;
 // the service never sees the passphrase or the derived key.
 type Account struct {
-	ID                   string    `json:"id"`
-	Email                string    `json:"email,omitempty"`
-	Salt                 string    `json:"salt"`
-	Plan                 string    `json:"plan"`
-	CreatedAt            time.Time `json:"created_at"`
-	StripeCustomerID     string    `json:"stripe_customer_id,omitempty"`
-	StripeSubscriptionID string    `json:"stripe_subscription_id,omitempty"`
+	ID        string    `json:"id"`
+	Email     string    `json:"email,omitempty"`
+	Salt      string    `json:"salt"`
+	Plan      string    `json:"plan"`
+	CreatedAt time.Time `json:"created_at"`
+	// Billing identifiers belong to whichever payment processor is configured
+	// (Stripe customer, Paystack customer code). The JSON names are historical:
+	// changing them would strand existing stores.
+	BillingCustomerID     string `json:"stripe_customer_id,omitempty"`
+	BillingSubscriptionID string `json:"stripe_subscription_id,omitempty"`
 }
 
 // Blob is one server's encrypted payload plus the metadata the service needs to
@@ -237,8 +240,10 @@ func (s *Store) SetPlan(accountID, plan string) error {
 	return s.saveLocked()
 }
 
-// SetStripe links an account to its Stripe customer and subscription.
-func (s *Store) SetStripe(accountID, customerID, subscriptionID string) error {
+// SetBilling links an account to a processor's customer and subscription. What
+// those identifiers are is the provider's business: a Stripe customer id, a
+// Paystack customer code, anything opaque.
+func (s *Store) SetBilling(accountID, customerID, subscriptionID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -246,15 +251,20 @@ func (s *Store) SetStripe(accountID, customerID, subscriptionID string) error {
 	if !ok {
 		return ErrNotFound
 	}
-	account.StripeCustomerID = customerID
-	account.StripeSubscriptionID = subscriptionID
+	account.BillingCustomerID = customerID
+	account.BillingSubscriptionID = subscriptionID
 	return s.saveLocked()
 }
 
-// FindAccountByStripeCustomer resolves an account from a Stripe customer id.
-// Subscription lifecycle events do not always carry our metadata, so the
+// SetStripe is kept for callers written against the Stripe-only API.
+func (s *Store) SetStripe(accountID, customerID, subscriptionID string) error {
+	return s.SetBilling(accountID, customerID, subscriptionID)
+}
+
+// FindAccountByBillingCustomer resolves an account from a processor's customer
+// id. Subscription lifecycle events do not always carry our metadata, so the
 // customer id is the fallback key.
-func (s *Store) FindAccountByStripeCustomer(customerID string) (string, error) {
+func (s *Store) FindAccountByBillingCustomer(customerID string) (string, error) {
 	if customerID == "" {
 		return "", ErrNotFound
 	}
@@ -263,11 +273,17 @@ func (s *Store) FindAccountByStripeCustomer(customerID string) (string, error) {
 	defer s.mu.Unlock()
 
 	for id, account := range s.data.Accounts {
-		if account.StripeCustomerID == customerID {
+		if account.BillingCustomerID == customerID {
 			return id, nil
 		}
 	}
 	return "", ErrNotFound
+}
+
+// FindAccountByStripeCustomer is kept for callers written against the Stripe-only
+// API.
+func (s *Store) FindAccountByStripeCustomer(customerID string) (string, error) {
+	return s.FindAccountByBillingCustomer(customerID)
 }
 
 // ListBlobs returns the names of every blob an account has, sorted.

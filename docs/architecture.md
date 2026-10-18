@@ -58,7 +58,7 @@ pip is only installed when the package actually has a `requirements.txt`.
 ## `cloud/`
 
 A dependency-free HTTP service: device-flow auth, encrypted-blob sync, teams,
-rate limiting, Stripe webhook verification and plan state. It stores only
+rate limiting, payment-processor webhooks (Stripe or Paystack) and plan state. It stores only
 ciphertext — the passphrase and keys never leave the client. Self-hostable.
 
 ## `registry/`

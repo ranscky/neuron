@@ -224,12 +224,19 @@ record/recent/stats/rotation behaviour, and the dashboard endpoints.
   memory, t ≤ 16, p ≤ 32, PBKDF2 iterations ≤ 10M): a hostile blob is an error, not an OOM.
   Tests cover the v1 read path, the v1 wire format staying byte-identical, cross-KDF rejection
   and the parameter caps.
-- **~~No Stripe Checkout creation~~ — code done 2026-10-18; going live still needs a key.**
-  `POST /v1/billing/checkout` mints a subscription Checkout Session and `neuron upgrade` prints the
-  URL, so Pro is now purchasable end to end in code. The plan still flips only from a
-  signature-verified webhook, and an account already on Pro gets 409 rather than a second
-  subscription. What remains is the human's: create the price in Stripe and set `STRIPE_SECRET_KEY`
-  + `STRIPE_PRICE_ID` on the deployed service.
+- **~~No Stripe Checkout creation~~ — done, then made provider-agnostic (2026-10-18).**
+  `POST /v1/billing/checkout` mints a subscription checkout and `neuron upgrade` prints the URL. The
+  plan flips only from a signature-verified webhook, and an account already on Pro gets 409 rather
+  than a second subscription.
+
+  **Stripe cannot onboard a Ghana-registered business**, so billing now sits behind a
+  `BillingProvider` interface with two implementations: Stripe (unchanged behaviour) and **Paystack**
+  (Bank-of-Ghana licensed, GHS settlement, international cards). `NEURON_BILLING_PROVIDER` selects
+  one; unset uses whichever is configured. Webhook verification is provider-specific (Stripe's
+  `Stripe-Signature`, Paystack's `X-Paystack-Signature` = HMAC-SHA512 of the raw body), and both are
+  normalised into one event shape before any plan changes. Going live is now: create a plan in the
+  Paystack dashboard and set `NEURON_PAYSTACK_SECRET_KEY` + `NEURON_PAYSTACK_PLAN` (+ optionally
+  `NEURON_PAYSTACK_CURRENCY`/`NEURON_PAYSTACK_AMOUNT`) on the deployed service.
 - **~~No browser approval page~~ — done 2026-10-18.** The service now serves a real page at the
   `/activate` URI it advertises: paste the code (plus the account id on the very first device), or
   open a one-time approval link. Links are minted by a signed-in machine via
@@ -362,6 +369,11 @@ recorded in the previous entry was fixed on 2026-10-18 — see below.)
 From section D specifically: policy is local only (not served from `cloud/`), team rotation does not
 re-encrypt existing blobs and there is no `team remove`, remote servers are proxied but not hosted,
 remote-endpoint credentials are not injected, and registry API keys have no revocation endpoint.
+
+**Billing caveats (2026-10-18).** Paystack identifies a customer by email, so an account created by
+the device flow without one cannot subscribe — checkout answers 502 and the log names the reason.
+There is no billing portal or CLI cancellation: cancelling happens in the processor's dashboard and
+the plan downgrades from its webhook. Proration between multiple plans is not modelled.
 
 **2026-10-18 — Python environments fixed (the `TestInstaller` failure).** Two real bugs, not an
 environment quirk: venv paths were POSIX-only (`bin/python3`, `bin/pip`), so on Windows a good

@@ -72,7 +72,7 @@ neuron --version
 |---|---|
 | `neuron login` | Sign in to a sync service via device flow |
 | `neuron logout` | Sign out |
-| `neuron upgrade` | Start a Stripe Checkout session to subscribe to the Pro plan |
+| `neuron upgrade` | Start a checkout session for the Pro plan (processor chosen by the service) |
 | `neuron sync` | Sync MCP servers and secrets to your other machines |
 
 `neuron login` flags:
