@@ -68,3 +68,6 @@ Thumbs.db
 .neuron/
 neuron.lock
 neuron.lock.json
+
+# --- Scratch work (probes, generated release fixtures) ---
+/.scratch/
